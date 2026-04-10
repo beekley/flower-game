@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 
 const GRID_SIZE = 15
 const TICK_RATE_MS = 1000
@@ -7,6 +7,7 @@ const POLLINATION_CHANCE = 0.1
 
 type Flower = {
   color: string
+  ancestors: Record<string, number> // "x,y" -> generation distance
 }
 
 type Cell = {
@@ -17,6 +18,38 @@ type Cell = {
 
 // Initialize Grid
 const grid = ref<Cell[][]>([])
+const selectedCell = ref<{ x: number; y: number } | null>(null)
+
+const ancestorHighlights = computed(() => {
+  if (!selectedCell.value) return new Map<string, number>()
+  const { x, y } = selectedCell.value
+  const cell = grid.value[y]?.[x]
+  if (!cell?.flower) return new Map<string, number>()
+  return new Map(Object.entries(cell.flower.ancestors))
+})
+
+const getAncestorStyle = (distance: number) => {
+  // distance 1 (parent): Bright Yellow (#ffcc00)
+  // distance 5+ (distant): Grey (#555555)
+  // We'll interpolate between Yellow and Grey
+  const maxDist = 5
+  const ratio = Math.min((distance - 1) / (maxDist - 1), 1)
+
+  // Yellow: R:255, G:204, B:0
+  // Grey: R:85, G:85, B:85
+  const r = 255 - (255 - 85) * ratio
+  const g = 204 - (204 - 85) * ratio
+  const b = 0 + (85 - 0) * ratio
+
+  const color = `rgb(${r}, ${g}, ${b})`
+  const opacity = Math.max(0.3, 1 - ratio * 0.5)
+
+  return {
+    borderColor: color,
+    backgroundColor: `${color}33`, // Low opacity background
+    boxShadow: `0 0 ${10 - ratio * 5}px rgba(${r}, ${g}, ${b}, ${opacity * 0.4})`,
+  }
+}
 
 const initializeGrid = () => {
   const newGrid: Cell[][] = []
@@ -109,7 +142,12 @@ const getAdjacentFlowers = (x: number, y: number) => {
 }
 
 const tick = () => {
-  const newFlowers: { x: number; y: number; color: string }[] = []
+  const newFlowers: {
+    x: number
+    y: number
+    color: string
+    ancestors: Record<string, number>
+  }[] = []
 
   for (let y = 0; y < GRID_SIZE; y++) {
     for (let x = 0; x < GRID_SIZE; x++) {
@@ -126,7 +164,31 @@ const tick = () => {
           const spawnCell = emptyCells[Math.floor(Math.random() * emptyCells.length)]
           if (spawnCell) {
             const newColor = mixColors(cell.flower.color, partner.flower.color)
-            newFlowers.push({ x: spawnCell.x, y: spawnCell.y, color: newColor })
+            const combinedAncestors: Record<string, number> = {}
+
+            // Helper to add ancestor with distance increment
+            const addAncestors = (src: Record<string, number>) => {
+              for (const [coord, dist] of Object.entries(src)) {
+                const newDist = dist + 1
+                if (!combinedAncestors[coord] || newDist < combinedAncestors[coord]) {
+                  combinedAncestors[coord] = newDist
+                }
+              }
+            }
+
+            addAncestors(cell.flower.ancestors)
+            addAncestors(partner.flower.ancestors)
+
+            // Add the immediate parents at distance 1
+            combinedAncestors[`${cell.x},${cell.y}`] = 1
+            combinedAncestors[`${partner.x},${partner.y}`] = 1
+
+            newFlowers.push({
+              x: spawnCell.x,
+              y: spawnCell.y,
+              color: newColor,
+              ancestors: combinedAncestors,
+            })
           }
         }
       }
@@ -134,12 +196,12 @@ const tick = () => {
   }
 
   // Apply new flowers
-  for (const { x, y, color } of newFlowers) {
+  for (const { x, y, color, ancestors } of newFlowers) {
     const row = grid.value[y]
     if (row) {
       const cell = row[x]
       if (cell && !cell.flower) {
-        cell.flower = { color }
+        cell.flower = { color, ancestors }
       }
     }
   }
@@ -156,12 +218,12 @@ onMounted(() => {
   const row2 = grid.value[mid + 2]
 
   if (row1) {
-    if (row1[mid]) row1[mid]!.flower = { color: '#ff0000' }
-    if (row1[mid + 1]) row1[mid + 1]!.flower = { color: '#0000ff' }
+    if (row1[mid]) row1[mid]!.flower = { color: '#ff0000', ancestors: {} }
+    if (row1[mid + 1]) row1[mid + 1]!.flower = { color: '#0000ff', ancestors: {} }
   }
   if (row2) {
-    if (row2[mid]) row2[mid]!.flower = { color: '#00ff00' }
-    if (row2[mid + 1]) row2[mid + 1]!.flower = { color: '#ffff00' }
+    if (row2[mid]) row2[mid]!.flower = { color: '#00ff00', ancestors: {} }
+    if (row2[mid + 1]) row2[mid + 1]!.flower = { color: '#ffff00', ancestors: {} }
   }
 
   tickInterval = window.setInterval(tick, TICK_RATE_MS)
@@ -172,14 +234,41 @@ onUnmounted(() => {
 })
 
 const placeFlower = (x: number, y: number) => {
-  if (grid.value[y] && grid.value[y][x] && !grid.value[y][x].flower) {
+  const row = grid.value[y]
+  if (row && row[x] && !row[x].flower) {
     // Generate a random bright color
     const randomComponent = () => Math.floor(Math.random() * 256)
     const color = rgbToHex(randomComponent(), randomComponent(), randomComponent())
-    grid.value[y][x].flower = { color }
+    row[x].flower = { color, ancestors: {} }
+  }
+}
+
+const handleCellClick = (x: number, y: number) => {
+  const cell = grid.value[y]?.[x]
+  if (!cell) return
+
+  if (cell.flower) {
+    // If clicking already selected cell, deselect
+    if (selectedCell.value?.x === x && selectedCell.value?.y === y) {
+      selectedCell.value = null
+    } else {
+      selectedCell.value = { x, y }
+    }
+  } else {
+    placeFlower(x, y)
+    selectedCell.value = null
   }
 }
 </script>
+
+<style>
+body,
+html {
+  margin: 0;
+  padding: 0;
+  background-color: #121212; /* Match simulation background */
+}
+</style>
 
 <template>
   <div class="simulation-container">
@@ -189,8 +278,17 @@ const placeFlower = (x: number, y: number) => {
           v-for="(cell, colIndex) in row"
           :key="`${rowIndex}-${colIndex}`"
           class="cell"
-          :class="{ 'has-flower': cell.flower }"
-          @click="placeFlower(cell.x, cell.y)"
+          :class="{
+            'has-flower': cell.flower,
+            'is-selected': selectedCell?.x === cell.x && selectedCell?.y === cell.y,
+            'is-ancestor': ancestorHighlights.has(`${cell.x},${cell.y}`),
+          }"
+          :style="
+            ancestorHighlights.has(`${cell.x},${cell.y}`)
+              ? getAncestorStyle(ancestorHighlights.get(`${cell.x},${cell.y}`)!)
+              : {}
+          "
+          @click="handleCellClick(cell.x, cell.y)"
         >
           <div
             v-if="cell.flower"
@@ -259,12 +357,43 @@ p {
   align-items: center;
   transition:
     background-color 0.2s,
-    transform 0.1s;
+    transform 0.1s,
+    border 0.2s,
+    box-shadow 0.2s;
+  box-sizing: border-box;
+  border: 2px solid transparent;
 }
 
-.cell:hover:not(.has-flower) {
+.cell.is-selected {
+  border: 2px solid #ffffff;
+  background-color: #444;
+  box-shadow: 0 0 15px rgba(255, 255, 255, 0.3);
+}
+
+.cell.is-ancestor {
+  transition: all 0.3s ease;
+}
+
+.cell:hover:not(.has-flower, .is-selected, .is-ancestor) {
   background-color: #3a3a3a;
   transform: scale(1.05);
+}
+
+.selection-info {
+  margin-top: 1.5rem;
+  font-size: 0.9rem;
+  color: #ffcc00;
+  font-weight: 500;
+  animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .flower {
