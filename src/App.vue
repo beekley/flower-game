@@ -33,13 +33,12 @@ const initializeGrid = () => {
 // Color mixing utility
 const hexToRgb = (hex: string) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)
-  return result
-    ? {
-        r: parseInt(result[1], 16),
-        g: parseInt(result[2], 16),
-        b: parseInt(result[3], 16),
-      }
-    : null
+  if (!result || !result[1] || !result[2] || !result[3]) return null
+  return {
+    r: parseInt(result[1], 16),
+    g: parseInt(result[2], 16),
+    b: parseInt(result[3], 16),
+  }
 }
 
 const componentToHex = (c: number) => {
@@ -77,8 +76,10 @@ const getAdjacentEmptyCells = (x: number, y: number) => {
     const nx = x + dx
     const ny = y + dy
     if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE) {
-      if (!grid.value[ny][nx].flower) {
-        emptyCells.push(grid.value[ny][nx])
+      const targetRow = grid.value[ny]
+      if (targetRow && !targetRow[nx]?.flower) {
+        const targetCell = targetRow[nx]
+        if (targetCell) emptyCells.push(targetCell)
       }
     }
   }
@@ -97,8 +98,10 @@ const getAdjacentFlowers = (x: number, y: number) => {
     const nx = x + dx
     const ny = y + dy
     if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE) {
-      if (grid.value[ny][nx].flower) {
-        flowers.push(grid.value[ny][nx])
+      const targetRow = grid.value[ny]
+      if (targetRow && targetRow[nx]?.flower) {
+        const targetCell = targetRow[nx]
+        if (targetCell) flowers.push(targetCell)
       }
     }
   }
@@ -110,17 +113,21 @@ const tick = () => {
 
   for (let y = 0; y < GRID_SIZE; y++) {
     for (let x = 0; x < GRID_SIZE; x++) {
-      const cell = grid.value[y][x]
-      if (!cell.flower) continue
+      const row = grid.value[y]
+      if (!row) continue
+      const cell = row[x]
+      if (!cell || !cell.flower) continue
 
       const adjacentFlowers = getAdjacentFlowers(x, y)
       if (adjacentFlowers.length > 0 && Math.random() < POLLINATION_CHANCE) {
         const partner = adjacentFlowers[Math.floor(Math.random() * adjacentFlowers.length)]
         const emptyCells = getAdjacentEmptyCells(x, y)
-        if (emptyCells.length > 0) {
+        if (partner && partner.flower && emptyCells.length > 0) {
           const spawnCell = emptyCells[Math.floor(Math.random() * emptyCells.length)]
-          const newColor = mixColors(cell.flower.color, partner.flower!.color)
-          newFlowers.push({ x: spawnCell.x, y: spawnCell.y, color: newColor })
+          if (spawnCell) {
+            const newColor = mixColors(cell.flower.color, partner.flower.color)
+            newFlowers.push({ x: spawnCell.x, y: spawnCell.y, color: newColor })
+          }
         }
       }
     }
@@ -128,8 +135,12 @@ const tick = () => {
 
   // Apply new flowers
   for (const { x, y, color } of newFlowers) {
-    if (!grid.value[y][x].flower) {
-      grid.value[y][x].flower = { color }
+    const row = grid.value[y]
+    if (row) {
+      const cell = row[x]
+      if (cell && !cell.flower) {
+        cell.flower = { color }
+      }
     }
   }
 }
@@ -140,11 +151,17 @@ onMounted(() => {
   initializeGrid()
 
   // Plant some initial flowers
-  grid.value[Math.floor(GRID_SIZE / 2)][Math.floor(GRID_SIZE / 2)].flower = { color: '#ff0000' }
-  grid.value[Math.floor(GRID_SIZE / 2)][Math.floor(GRID_SIZE / 2) + 1].flower = { color: '#0000ff' }
-  grid.value[Math.floor(GRID_SIZE / 2) + 2][Math.floor(GRID_SIZE / 2)].flower = { color: '#00ff00' }
-  grid.value[Math.floor(GRID_SIZE / 2) + 2][Math.floor(GRID_SIZE / 2) + 1].flower = {
-    color: '#ffff00',
+  const mid = Math.floor(GRID_SIZE / 2)
+  const row1 = grid.value[mid]
+  const row2 = grid.value[mid + 2]
+
+  if (row1) {
+    if (row1[mid]) row1[mid]!.flower = { color: '#ff0000' }
+    if (row1[mid + 1]) row1[mid + 1]!.flower = { color: '#0000ff' }
+  }
+  if (row2) {
+    if (row2[mid]) row2[mid]!.flower = { color: '#00ff00' }
+    if (row2[mid + 1]) row2[mid + 1]!.flower = { color: '#ffff00' }
   }
 
   tickInterval = window.setInterval(tick, TICK_RATE_MS)
