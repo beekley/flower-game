@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 
-const GRID_SIZE = 15
+const GRID_SIZE = 50
 const TICK_RATE_MS = 1000
 const POLLINATION_CHANCE = 0.1
 
@@ -227,6 +227,16 @@ onMounted(() => {
   }
 
   tickInterval = window.setInterval(tick, TICK_RATE_MS)
+
+  nextTick(() => {
+    const scrollX = (document.documentElement.scrollWidth - window.innerWidth) / 2
+    const scrollY = (document.documentElement.scrollHeight - window.innerHeight) / 2
+    window.scrollTo({
+      top: scrollY,
+      left: scrollX,
+      behavior: 'auto',
+    })
+  })
 })
 
 onUnmounted(() => {
@@ -267,6 +277,7 @@ html {
   margin: 0;
   padding: 0;
   background-color: #121212; /* Match simulation background */
+  overscroll-behavior: none; /* Prevent swipe-to-back browser navigation */
 }
 </style>
 
@@ -308,7 +319,6 @@ html {
 .simulation-container {
   display: flex;
   flex-direction: column;
-  align-items: center;
   font-family: 'Inter', sans-serif;
   background-color: #121212;
   color: #e0e0e0;
@@ -318,27 +328,26 @@ html {
 }
 
 h1 {
-  margin: 0 0 1rem 0;
+  margin: 0 auto 1rem auto;
   background: linear-gradient(90deg, #ff8a00, #e52e71);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+  align-self: center;
 }
 
 p {
   color: #a0a0a0;
-  margin-bottom: 2rem;
+  margin: 0 auto 2rem auto;
   max-width: 600px;
   text-align: center;
+  align-self: center;
 }
 
 .grid {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  background-color: #1e1e1e;
-  padding: 1rem;
-  border-radius: 12px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  margin: 0 auto; /* safely center without clipping */
 }
 
 .row {
@@ -380,11 +389,12 @@ p {
 }
 
 .selection-info {
-  margin-top: 1.5rem;
+  margin: 1.5rem auto 0 auto;
   font-size: 0.9rem;
   color: #ffcc00;
   font-weight: 500;
   animation: fadeIn 0.3s ease-out;
+  align-self: center;
 }
 
 @keyframes fadeIn {
