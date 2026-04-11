@@ -21,6 +21,28 @@ type Cell = {
 // Initialize Grid
 const grid = ref<Cell[][]>([])
 const selectedCell = ref<{ x: number; y: number } | null>(null)
+const selectedBrushColor = ref<string | null>(null)
+
+const colorMap: Record<string, string> = {
+  '1': '#ff0000', // Red
+  '2': '#ff8800', // Orange
+  '3': '#ffff00', // Yellow
+  '4': '#00ff00', // Green
+  '5': '#00ffff', // Cyan
+  '6': '#0000ff', // Blue
+  '7': '#8800ff', // Purple
+  '8': '#ff00ff', // Magenta
+  '9': '#ffffff', // White
+}
+
+const handleKeyDown = (e: KeyboardEvent) => {
+  const color = colorMap[e.key]
+  if (e.key === '0') {
+    selectedBrushColor.value = null
+  } else if (color) {
+    selectedBrushColor.value = color
+  }
+}
 
 const ancestorHighlights = computed(() => {
   if (!selectedCell.value) return new Map<string, number>()
@@ -257,6 +279,7 @@ onMounted(() => {
   }
 
   tickInterval = window.setInterval(tick, TICK_RATE_MS)
+  window.addEventListener('keydown', handleKeyDown)
 
   nextTick(() => {
     const scrollX = (document.documentElement.scrollWidth - window.innerWidth) / 2
@@ -271,14 +294,20 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (tickInterval) clearInterval(tickInterval)
+  window.removeEventListener('keydown', handleKeyDown)
 })
 
 const placeFlower = (x: number, y: number) => {
   const row = grid.value[y]
   if (row && row[x] && !row[x].flower) {
-    // Generate a random bright color
-    const randomComponent = () => Math.floor(Math.random() * 256)
-    const color = rgbToHex(randomComponent(), randomComponent(), randomComponent())
+    let color: string
+    if (selectedBrushColor.value) {
+      color = selectedBrushColor.value
+    } else {
+      // Generate a random bright color
+      const randomComponent = () => Math.floor(Math.random() * 256)
+      color = rgbToHex(randomComponent(), randomComponent(), randomComponent())
+    }
     row[x].flower = { color, ancestors: {}, age: 0 }
   }
 }
@@ -355,22 +384,6 @@ html {
   min-height: 100vh;
   padding: 2rem;
   box-sizing: border-box;
-}
-
-h1 {
-  margin: 0 auto 1rem auto;
-  background: linear-gradient(90deg, #ff8a00, #e52e71);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  align-self: center;
-}
-
-p {
-  color: #a0a0a0;
-  margin: 0 auto 2rem auto;
-  max-width: 600px;
-  text-align: center;
-  align-self: center;
 }
 
 .grid {
