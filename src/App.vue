@@ -1,26 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { hslToHex, mixColors } from './utils/colors'
+import type { FlowerSpawn, Cell } from './types'
 
-// --- Constants & Types ---
+// --- Constants ---
 const GRID_SIZE = 100
 const TICK_RATE_MS = 100
 const MAX_POLLINATION_CHANCE = 0.1
 const MAX_FLOWER_AGE = 100
-
-type Flower = {
-  color: string
-  ancestors: Record<string, number>
-  age: number
-}
-
-type FlowerSpawn = Flower & { x: number; y: number }
-
-type Cell = {
-  x: number
-  y: number
-  flower: Flower | null
-}
 
 // --- State & Global Variables ---
 const grid = ref<Cell[][]>([])
@@ -29,7 +16,12 @@ const selectedBrushColor = ref<string | null>(null)
 const isMouseDown = ref(false)
 const isPaused = ref(false)
 const rainbowHue = ref(0)
+const showDebugMenu = ref(false)
+const debugPressCount = ref(0)
+const lastDebugPressTime = ref(0)
+const usedMemory = ref(0)
 let tickInterval: number | undefined
+let memoryInterval: number | undefined
 
 const colorMap: Record<string, string> = {
   '1': '#ff0000',
@@ -45,6 +37,19 @@ const colorMap: Record<string, string> = {
 
 // --- Input Event Handlers ---
 const handleKeyDown = (e: KeyboardEvent) => {
+  if (e.key.toLowerCase() === 'b') {
+    const now = Date.now()
+    if (now - lastDebugPressTime.value > 1000) {
+      debugPressCount.value = 1
+    } else {
+      debugPressCount.value++
+      if (debugPressCount.value >= 5) {
+        showDebugMenu.value = !showDebugMenu.value
+        debugPressCount.value = 0
+      }
+    }
+    lastDebugPressTime.value = now
+  }
   if (e.code === 'Space') {
     e.preventDefault()
     isPaused.value = !isPaused.value
@@ -184,6 +189,34 @@ const tick = () => {
     }
   }
 
+  // --- Ancestor cleanup pass ---
+  for (let y = 0; y < GRID_SIZE; y++) {
+    const row = grid.value[y]
+    if (!row) continue
+    for (let x = 0; x < GRID_SIZE; x++) {
+      const flower = row[x]?.flower
+      if (!flower) continue
+
+      const entries = Object.entries(flower.ancestors)
+      if (entries.length === 0) continue
+
+      const cleaned: Record<string, number> = {}
+      let changed = false
+      for (const [coord, dist] of entries) {
+        const parts = coord.split(',')
+        const ax = parseInt(parts[0] || '', 10)
+        const ay = parseInt(parts[1] || '', 10)
+
+        if (!isNaN(ax) && !isNaN(ay) && grid.value[ay]?.[ax]?.flower) {
+          cleaned[coord] = dist
+        } else {
+          changed = true
+        }
+      }
+      if (changed) flower.ancestors = cleaned
+    }
+  }
+
   for (const f of newFlowers) {
     const row = grid.value[f.y]
     const cell = row?.[f.x]
@@ -193,10 +226,18 @@ const tick = () => {
   }
 }
 
+const updateMemory = () => {
+  const perf = window.performance
+  if (perf.memory) {
+    usedMemory.value = Math.round(perf.memory.usedJSHeapSize / (1024 * 1024))
+  }
+}
+
 // --- Component Lifecycle ---
 onMounted(() => {
   initializeGrid()
   tickInterval = window.setInterval(tick, TICK_RATE_MS)
+  memoryInterval = window.setInterval(updateMemory, 1000)
   window.addEventListener('keydown', handleKeyDown)
   window.addEventListener('mousedown', handleGlobalMouseDown)
   window.addEventListener('mouseup', handleGlobalMouseUp)
@@ -212,6 +253,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (tickInterval) clearInterval(tickInterval)
+  if (memoryInterval) clearInterval(memoryInterval)
   window.removeEventListener('keydown', handleKeyDown)
   window.removeEventListener('mousedown', handleGlobalMouseDown)
   window.removeEventListener('mouseup', handleGlobalMouseUp)
@@ -244,6 +286,10 @@ const handleCellInteract = (x: number, y: number, isClick: boolean) => {
     if (isClick) selectedCell.value = null
   }
 }
+
+defineExpose({
+  grid,
+})
 </script>
 
 <style>
@@ -286,6 +332,13 @@ html {
             }"
           ></div>
         </div>
+      </div>
+    </div>
+
+    <div v-if="showDebugMenu" class="debug-menu">
+      <div class="debug-item">
+        <span class="debug-label">Memory Usage:</span>
+        <span class="debug-value">{{ usedMemory > 0 ? usedMemory + ' MB' : 'N/A' }}</span>
       </div>
     </div>
   </div>
@@ -361,6 +414,54 @@ html {
   }
   100% {
     transform: scale(1);
+  }
+}
+
+.debug-menu {
+  position: fixed;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 0.75rem 1.5rem;
+  display: flex;
+  gap: 1.5rem;
+  z-index: 1000;
+  pointer-events: none;
+  animation: slideUp 0.3s ease-out;
+}
+
+.debug-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.debug-label {
+  color: #888;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.debug-value {
+  color: #fff;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+@keyframes slideUp {
+  from {
+    transform: translate(-50%, 20px);
+    opacity: 0;
+  }
+  to {
+    transform: translate(-50%, 0);
+    opacity: 1;
   }
 }
 </style>

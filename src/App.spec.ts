@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, VueWrapper } from '@vue/test-utils'
 import App from './App.vue'
+import type { Flower } from './types'
 
 describe('App.vue', () => {
   let wrapper: VueWrapper<InstanceType<typeof App>>
@@ -77,5 +78,98 @@ describe('App.vue', () => {
 
     // The original flower should have died
     expect(cells[0]!.find('.flower').exists()).toBe(false)
+  })
+
+  it('cleans up ancestors that no longer exist on the grid', async () => {
+    // Mock random to ensure pollination (always succeeds)
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0)
+
+    // Plant two flowers next to each other
+    // (0,0) and (1,0) are adjacent
+    const rows = wrapper.findAll('.row')
+    const cell00 = rows[0]!.findAll('.cell')[0]!
+    const cell10 = rows[0]!.findAll('.cell')[1]!
+
+    await cell00.trigger('mousedown')
+    await cell10.trigger('mousedown')
+
+    // Trigger tick to allow pollination
+    vi.advanceTimersByTime(100)
+    await wrapper.vm.$nextTick()
+
+    const grid = wrapper.vm.grid
+
+    // Find a flower that has ancestors (the child)
+    let childFlower: Flower | null = null
+    
+    for (const row of grid) {
+      for (const cell of row) {
+        const flower = cell.flower
+        if (flower && Object.keys(flower.ancestors).length > 0) {
+          childFlower = flower
+          break
+        }
+      }
+      if (childFlower) break
+    }
+
+    expect(childFlower).not.toBeNull()
+    const parentCoord = '0,0'
+    
+    if (childFlower) {
+      expect(childFlower.ancestors).toHaveProperty(parentCoord)
+    }
+
+    // Manually remove the parent at (0,0) safely
+    const firstRow = grid[0]
+    const firstCell = firstRow?.[0]
+    if (firstCell) {
+      firstCell.flower = null
+    }
+
+    // Trigger another tick - this is when cleanup should happen
+    vi.advanceTimersByTime(100)
+    await wrapper.vm.$nextTick()
+
+    // Verify parent is no longer in ancestors
+    if (childFlower) {
+      expect(childFlower.ancestors).not.toHaveProperty(parentCoord)
+    }
+
+    randomSpy.mockRestore()
+  })
+
+  it('toggles debug menu after pressing b five times quickly', async () => {
+    expect(wrapper.find('.debug-menu').exists()).toBe(false)
+
+    for (let i = 0; i < 5; i++) {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b' }))
+    }
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.debug-menu').exists()).toBe(true)
+
+    // Toggle off
+    for (let i = 0; i < 5; i++) {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b' }))
+    }
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.debug-menu').exists()).toBe(false)
+  })
+
+  it('does not toggle debug menu if presses are slow', async () => {
+    expect(wrapper.find('.debug-menu').exists()).toBe(false)
+
+    for (let i = 0; i < 4; i++) {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b' }))
+    }
+
+    // Wait more than 1 second (threshold is 1000ms)
+    vi.advanceTimersByTime(1100)
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b' }))
+    await wrapper.vm.$nextTick()
+
+    // Counter should have been reset by the delay, so 5th press is now effectively the 1st
+    expect(wrapper.find('.debug-menu').exists()).toBe(false)
   })
 })
