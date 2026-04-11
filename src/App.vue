@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { hslToHex, mixColors } from './utils/colors'
 
+// --- Constants & Types ---
 const GRID_SIZE = 50
 const TICK_RATE_MS = 100
 const MAX_POLLINATION_CHANCE = 0.1
@@ -8,9 +10,11 @@ const MAX_FLOWER_AGE = 100
 
 type Flower = {
   color: string
-  ancestors: Record<string, number> // "x,y" -> generation distance
+  ancestors: Record<string, number>
   age: number
 }
+
+type FlowerSpawn = Flower & { x: number; y: number }
 
 type Cell = {
   x: number
@@ -18,286 +22,170 @@ type Cell = {
   flower: Flower | null
 }
 
-// Initialize Grid
+// --- State & Global Variables ---
 const grid = ref<Cell[][]>([])
 const selectedCell = ref<{ x: number; y: number } | null>(null)
 const selectedBrushColor = ref<string | null>(null)
 const isMouseDown = ref(false)
+const rainbowHue = ref(0)
+let tickInterval: number | undefined
 
 const colorMap: Record<string, string> = {
-  '1': '#ff0000', // Red
-  '2': '#ff8800', // Orange
-  '3': '#ffff00', // Yellow
-  '4': '#00ff00', // Green
-  '5': '#00ffff', // Cyan
-  '6': '#0000ff', // Blue
-  '7': '#8800ff', // Purple
-  '8': '#ff00ff', // Magenta
-  '9': '#ffffff', // White
+  '1': '#ff0000', '2': '#ff8800', '3': '#ffff00',
+  '4': '#00ff00', '5': '#00ffff', '6': '#0000ff',
+  '7': '#8800ff', '8': '#ff00ff', '9': '#ffffff',
 }
 
+// --- Input Event Handlers ---
 const handleKeyDown = (e: KeyboardEvent) => {
   const color = colorMap[e.key]
-  if (e.key === '0') {
-    selectedBrushColor.value = null
-  } else if (color) {
-    selectedBrushColor.value = color
-  }
+  if (e.key === '0') selectedBrushColor.value = null
+  else if (color) selectedBrushColor.value = color
 }
 
+const handleGlobalMouseDown = (e: MouseEvent) => {
+  if (e.button === 0) isMouseDown.value = true
+}
+
+const handleGlobalMouseUp = (e: MouseEvent) => {
+  if (e.button === 0) isMouseDown.value = false
+}
+
+// --- Computed Properties & Dynamic Styling ---
 const ancestorHighlights = computed(() => {
   if (!selectedCell.value) return new Map<string, number>()
-  const { x, y } = selectedCell.value
-  const cell = grid.value[y]?.[x]
-  if (!cell?.flower) return new Map<string, number>()
-  return new Map(Object.entries(cell.flower.ancestors))
+  const cell = grid.value[selectedCell.value.y]?.[selectedCell.value.x]
+  return cell?.flower ? new Map(Object.entries(cell.flower.ancestors)) : new Map()
 })
 
 const getAncestorStyle = (distance: number) => {
-  // distance 1 (parent): Bright Yellow (#ffcc00)
-  // distance 5+ (distant): Grey (#555555)
-  // We'll interpolate between Yellow and Grey
-  const maxDist = 5
-  const ratio = Math.min((distance - 1) / (maxDist - 1), 1)
-
-  // Yellow: R:255, G:204, B:0
-  // Grey: R:85, G:85, B:85
-  const r = 255 - (255 - 85) * ratio
-  const g = 204 - (204 - 85) * ratio
-  const b = 0 + (85 - 0) * ratio
-
+  const ratio = Math.min((distance - 1) / 4, 1)
+  const r = 255 - 170 * ratio
+  const g = 204 - 119 * ratio
+  const b = 85 * ratio
   const color = `rgb(${r}, ${g}, ${b})`
   const opacity = Math.max(0.3, 1 - ratio * 0.5)
 
   return {
     borderColor: color,
-    backgroundColor: `${color}33`, // Low opacity background
+    backgroundColor: `${color}33`,
     boxShadow: `0 0 ${10 - ratio * 5}px rgba(${r}, ${g}, ${b}, ${opacity * 0.4})`,
   }
 }
 
+// --- Grid Initialization & Neighbors ---
 const initializeGrid = () => {
-  const newGrid: Cell[][] = []
-  for (let y = 0; y < GRID_SIZE; y++) {
-    const row: Cell[] = []
-    for (let x = 0; x < GRID_SIZE; x++) {
-      row.push({ x, y, flower: null })
-    }
-    newGrid.push(row)
+  grid.value = Array.from({ length: GRID_SIZE }, (_, y) =>
+    Array.from({ length: GRID_SIZE }, (_, x) => ({ x, y, flower: null }))
+  )
+}
+
+const getAdjacentCells = (x: number, y: number) => {
+  const neighbors: Cell[] = []
+  for (const { dx, dy } of [{ dx: 0, dy: -1 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }, { dx: 1, dy: 0 }]) {
+    const cell = grid.value[y + dy]?.[x + dx]
+    if (cell) neighbors.push(cell)
   }
-  grid.value = newGrid
+  return neighbors
 }
 
-const rainbowHue = ref(0)
+// --- Simulation Core: Flow & Pollination ---
+const processCellPollination = (
+  x: number,
+  y: number,
+  cell: Cell,
+  deadFlowers: { x: number; y: number }[],
+  newFlowers: FlowerSpawn[]
+) => {
+  cell.flower!.age++
 
-const hslToHex = (h: number, s: number, l: number) => {
-  l /= 100
-  const a = (s * Math.min(l, 1 - l)) / 100
-  const f = (n: number) => {
-    const k = (n + h / 30) % 12
-    const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1)
-    return Math.round(255 * color)
-      .toString(16)
-      .padStart(2, '0')
+  if (cell.flower!.age > MAX_FLOWER_AGE) {
+    deadFlowers.push({ x, y })
+    return
   }
-  return `#${f(0)}${f(8)}${f(4)}`
-}
 
-// Color mixing utility
-const hexToRgb = (hex: string) => {
-  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)
-  if (!result || !result[1] || !result[2] || !result[3]) return null
-  return {
-    r: parseInt(result[1], 16),
-    g: parseInt(result[2], 16),
-    b: parseInt(result[3], 16),
-  }
-}
+  let chance = MAX_POLLINATION_CHANCE
+  if (cell.flower!.age > MAX_FLOWER_AGE * 0.25) chance *= 0.05
+  else if (cell.flower!.age > MAX_FLOWER_AGE * 0.1) chance *= 0.1
 
-const componentToHex = (c: number) => {
-  const hex = Math.round(c).toString(16)
-  return hex.length == 1 ? '0' + hex : hex
-}
+  if (Math.random() >= chance) return
 
-const rgbToHex = (r: number, g: number, b: number) => {
-  return '#' + componentToHex(r) + componentToHex(g) + componentToHex(b)
-}
+  const neighbors = getAdjacentCells(x, y)
+  const adjacentFlowers = neighbors.filter((n) => n.flower)
+  const emptyCells = neighbors.filter((n) => !n.flower)
 
-const mixColors = (color1: string, color2: string) => {
-  const rgb1 = hexToRgb(color1)
-  const rgb2 = hexToRgb(color2)
+  if (adjacentFlowers.length === 0 || emptyCells.length === 0) return
 
-  if (!rgb1 || !rgb2) return color1
+  const partner = adjacentFlowers[Math.floor(Math.random() * adjacentFlowers.length)]
+  const spawnCell = emptyCells[Math.floor(Math.random() * emptyCells.length)]
 
-  const r = (rgb1.r + rgb2.r) / 2
-  const g = (rgb1.g + rgb2.g) / 2
-  const b = (rgb1.b + rgb2.b) / 2
+  if (!partner || !spawnCell) return
 
-  return rgbToHex(r, g, b)
-}
-
-// Simulation Logic
-const getAdjacentEmptyCells = (x: number, y: number) => {
-  const emptyCells: Cell[] = []
-  const coords = [
-    { dx: 0, dy: -1 },
-    { dx: 0, dy: 1 },
-    { dx: -1, dy: 0 },
-    { dx: 1, dy: 0 },
-  ]
-  for (const { dx, dy } of coords) {
-    const nx = x + dx
-    const ny = y + dy
-    if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE) {
-      const targetRow = grid.value[ny]
-      if (targetRow && !targetRow[nx]?.flower) {
-        const targetCell = targetRow[nx]
-        if (targetCell) emptyCells.push(targetCell)
+  const combinedAncestors: Record<string, number> = {}
+  const addAncestors = (src: Record<string, number>) => {
+    for (const [coord, dist] of Object.entries(src)) {
+      if (!combinedAncestors[coord] || dist + 1 < combinedAncestors[coord]) {
+        combinedAncestors[coord] = dist + 1
       }
     }
   }
-  return emptyCells
+
+  addAncestors(cell.flower!.ancestors)
+  addAncestors(partner.flower!.ancestors)
+  combinedAncestors[`${cell.x},${cell.y}`] = 1
+  combinedAncestors[`${partner.x},${partner.y}`] = 1
+
+  newFlowers.push({
+    x: spawnCell.x,
+    y: spawnCell.y,
+    color: mixColors(cell.flower!.color, partner.flower!.color),
+    ancestors: combinedAncestors,
+    age: 0,
+  })
 }
 
-const getAdjacentFlowers = (x: number, y: number) => {
-  const flowers: Cell[] = []
-  const coords = [
-    { dx: 0, dy: -1 },
-    { dx: 0, dy: 1 },
-    { dx: -1, dy: 0 },
-    { dx: 1, dy: 0 },
-  ]
-  for (const { dx, dy } of coords) {
-    const nx = x + dx
-    const ny = y + dy
-    if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE) {
-      const targetRow = grid.value[ny]
-      if (targetRow && targetRow[nx]?.flower) {
-        const targetCell = targetRow[nx]
-        if (targetCell) flowers.push(targetCell)
-      }
-    }
-  }
-  return flowers
-}
-
+// --- Main Simulation Loop (Tick) ---
 const tick = () => {
-  const newFlowers: {
-    x: number
-    y: number
-    color: string
-    ancestors: Record<string, number>
-    age: number
-  }[] = []
+  const newFlowers: FlowerSpawn[] = []
   const deadFlowers: { x: number; y: number }[] = []
 
   for (let y = 0; y < GRID_SIZE; y++) {
     for (let x = 0; x < GRID_SIZE; x++) {
-      const row = grid.value[y]
-      if (!row) continue
-      const cell = row[x]
-      if (!cell || !cell.flower) continue
-
-      cell.flower.age++
-
-      if (cell.flower.age > MAX_FLOWER_AGE) {
-        deadFlowers.push({ x, y })
-        continue
-      }
-
-      let pollinationChance = MAX_POLLINATION_CHANCE
-      if (cell.flower.age > MAX_FLOWER_AGE * 0.25) {
-        pollinationChance = MAX_POLLINATION_CHANCE * 0.05
-      } else if (cell.flower.age > MAX_FLOWER_AGE * 0.1) {
-        pollinationChance = MAX_POLLINATION_CHANCE * 0.1
-      }
-
-      const adjacentFlowers = getAdjacentFlowers(x, y)
-      if (adjacentFlowers.length > 0 && Math.random() < pollinationChance) {
-        const partner = adjacentFlowers[Math.floor(Math.random() * adjacentFlowers.length)]
-        const emptyCells = getAdjacentEmptyCells(x, y)
-        if (partner && partner.flower && emptyCells.length > 0) {
-          const spawnCell = emptyCells[Math.floor(Math.random() * emptyCells.length)]
-          if (spawnCell) {
-            const newColor = mixColors(cell.flower.color, partner.flower.color)
-            const combinedAncestors: Record<string, number> = {}
-
-            // Helper to add ancestor with distance increment
-            const addAncestors = (src: Record<string, number>) => {
-              for (const [coord, dist] of Object.entries(src)) {
-                const newDist = dist + 1
-                if (!combinedAncestors[coord] || newDist < combinedAncestors[coord]) {
-                  combinedAncestors[coord] = newDist
-                }
-              }
-            }
-
-            addAncestors(cell.flower.ancestors)
-            addAncestors(partner.flower.ancestors)
-
-            // Add the immediate parents at distance 1
-            combinedAncestors[`${cell.x},${cell.y}`] = 1
-            combinedAncestors[`${partner.x},${partner.y}`] = 1
-
-            newFlowers.push({
-              x: spawnCell.x,
-              y: spawnCell.y,
-              color: newColor,
-              ancestors: combinedAncestors,
-              age: 0,
-            })
-          }
-        }
-      }
+      const cell = grid.value[y]?.[x]
+      if (cell?.flower) processCellPollination(x, y, cell, deadFlowers, newFlowers)
     }
   }
 
-  // Apply deaths
   for (const { x, y } of deadFlowers) {
     const row = grid.value[y]
-    if (row && row[x]) {
-      row[x].flower = null
-      if (selectedCell.value?.x === x && selectedCell.value?.y === y) {
-        selectedCell.value = null
-      }
+    const cell = row?.[x]
+    if (cell) {
+      cell.flower = null
+      if (selectedCell.value?.x === x && selectedCell.value?.y === y) selectedCell.value = null
     }
   }
 
-  // Apply new flowers
-  for (const { x, y, color, ancestors, age } of newFlowers) {
-    const row = grid.value[y]
-    if (row) {
-      const cell = row[x]
-      if (cell && !cell.flower) {
-        cell.flower = { color, ancestors, age }
-      }
+  for (const f of newFlowers) {
+    const row = grid.value[f.y]
+    const cell = row?.[f.x]
+    if (cell) {
+      cell.flower = { color: f.color, ancestors: f.ancestors, age: f.age }
     }
   }
 }
 
-let tickInterval: number | undefined
-
-const handleGlobalMouseDown = (e: MouseEvent) => {
-  if (e.button === 0) isMouseDown.value = true
-}
-const handleGlobalMouseUp = (e: MouseEvent) => {
-  if (e.button === 0) isMouseDown.value = false
-}
-
+// --- Component Lifecycle ---
 onMounted(() => {
   initializeGrid()
-
   tickInterval = window.setInterval(tick, TICK_RATE_MS)
   window.addEventListener('keydown', handleKeyDown)
   window.addEventListener('mousedown', handleGlobalMouseDown)
   window.addEventListener('mouseup', handleGlobalMouseUp)
 
   nextTick(() => {
-    const scrollX = (document.documentElement.scrollWidth - window.innerWidth) / 2
-    const scrollY = (document.documentElement.scrollHeight - window.innerHeight) / 2
     window.scrollTo({
-      top: scrollY,
-      left: scrollX,
+      top: (document.documentElement.scrollHeight - window.innerHeight) / 2,
+      left: (document.documentElement.scrollWidth - window.innerWidth) / 2,
       behavior: 'auto',
     })
   })
@@ -310,6 +198,7 @@ onUnmounted(() => {
   window.removeEventListener('mouseup', handleGlobalMouseUp)
 })
 
+// --- User Interaction (Painting & Clicking) ---
 const placeFlower = (x: number, y: number) => {
   const row = grid.value[y]
   if (row && row[x] && !row[x].flower) {
@@ -317,7 +206,6 @@ const placeFlower = (x: number, y: number) => {
     if (selectedBrushColor.value) {
       color = selectedBrushColor.value
     } else {
-      // Generate next rainbow color
       color = hslToHex(rainbowHue.value, 100, 50)
       rainbowHue.value = (rainbowHue.value + 15) % 360
     }
@@ -329,15 +217,9 @@ const handleCellInteract = (x: number, y: number, isClick: boolean) => {
   const cell = grid.value[y]?.[x]
   if (!cell) return
 
-  // Only handle selection logic on an explicit click of an existing flower
   if (isClick && cell.flower) {
-    if (selectedCell.value?.x === x && selectedCell.value?.y === y) {
-      selectedCell.value = null
-    } else {
-      selectedCell.value = { x, y }
-    }
+    selectedCell.value = selectedCell.value?.x === x && selectedCell.value?.y === y ? null : { x, y }
   } else if (isClick || isMouseDown.value) {
-    // Paint if dragging or explicitly clicking
     placeFlower(x, y)
     if (isClick) selectedCell.value = null
   }
@@ -356,12 +238,6 @@ html {
 
 <template>
   <div class="simulation-container">
-    <div class="controls">
-      Current Brush: 
-      <span v-if="selectedBrushColor" class="brush-swatch" :style="{ backgroundColor: selectedBrushColor }"></span>
-      <span v-else class="brush-text rainbow-text">Rainbow Flow</span>
-      <span class="brush-hint"> (Keys 1-9 manually pick a color, 0 sets rainbow)</span>
-    </div>
     <div class="grid">
       <div v-for="(row, rowIndex) in grid" :key="rowIndex" class="row">
         <div
@@ -407,40 +283,6 @@ html {
   box-sizing: border-box;
 }
 
-.controls {
-  margin-bottom: 1rem;
-  text-align: center;
-  font-size: 0.9rem;
-}
-
-.brush-swatch {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  margin: 0 4px;
-}
-
-.brush-text {
-  font-weight: bold;
-}
-.rainbow-text {
-  background: linear-gradient(90deg, #ff0000, #ffaa00, #ffff00, #00ff00, #00ffff, #0000ff, #aa00ff, #ff00ff);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: rainbowShift 3s linear infinite;
-  background-size: 200% 100%;
-}
-
-@keyframes rainbowShift {
-  0% { background-position: 0% 50%; }
-  100% { background-position: -200% 50%; }
-}
-
-.brush-hint {
-  color: #888;
-}
-
 .grid {
   display: flex;
   flex-direction: column;
@@ -484,24 +326,6 @@ html {
 .cell:hover:not(.has-flower, .is-selected, .is-ancestor) {
   background-color: #3a3a3a;
   transform: scale(1.05);
-}
-
-.selection-info {
-  margin: 1.5rem auto 0 auto;
-  font-size: 0.9rem;
-  color: #ffcc00;
-  font-weight: 500;
-  animation: fadeIn 0.3s ease-out;
-  align-self: center;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
 }
 
 .flower {
