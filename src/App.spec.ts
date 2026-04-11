@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, VueWrapper } from '@vue/test-utils'
 import App from './App.vue'
-import type { Flower } from './types'
+import type { Flower, Cell } from './types'
 
 describe('App.vue', () => {
   let wrapper: VueWrapper<InstanceType<typeof App>>
@@ -9,8 +9,43 @@ describe('App.vue', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     window.scrollTo = vi.fn()
+
+    // Mock Canvas context
+    HTMLCanvasElement.prototype.getContext = vi.fn().mockReturnValue({
+      save: vi.fn(),
+      scale: vi.fn(),
+      fillRect: vi.fn(),
+      beginPath: vi.fn(),
+      roundRect: vi.fn(),
+      fill: vi.fn(),
+      stroke: vi.fn(),
+      arc: vi.fn(),
+      restore: vi.fn(),
+    })
+
+    // Mock getBoundingClientRect for stable coordinate mapping
+    HTMLCanvasElement.prototype.getBoundingClientRect = vi.fn().mockReturnValue({
+      left: 0,
+      top: 0,
+      width: 2400,
+      height: 2400,
+    })
+
     wrapper = mount(App)
   })
+
+  const clickCanvas = async (x: number, y: number, isClick = true) => {
+    // TOTAL_CELL_SIZE = 24 in App.vue
+    const clientX = x * 24 + 10
+    const clientY = y * 24 + 10
+    const canvas = wrapper.find('canvas')
+    
+    if (isClick) {
+      await canvas.trigger('mousedown', { clientX, clientY, button: 0 })
+    } else {
+      await canvas.trigger('mousemove', { clientX, clientY })
+    }
+  }
 
   afterEach(() => {
     vi.clearAllTimers()
@@ -19,85 +54,75 @@ describe('App.vue', () => {
   })
 
   it('spawns an empty grid initially', () => {
-    const rows = wrapper.findAll('.row')
-    const cells = wrapper.findAll('.cell')
+    const grid = wrapper.vm.grid
     
-    // Verify a square grid is generated
-    expect(rows.length).toBeGreaterThan(0)
-    expect(cells.length).toBe(rows.length * rows.length)
+    // Verify a square grid is generated in state
+    expect(grid.length).toBe(100)
+    expect(grid[0]!.length).toBe(100)
 
-    const flowers = wrapper.findAll('.flower')
-    expect(flowers.length).toBe(0)
+    expect(wrapper.vm.activeFlowers.size).toBe(0)
   })
 
   it('can paint a flower on an empty cell using mousedown and mouseenter', async () => {
-    const cells = wrapper.findAll('.cell')
+    // simulate click (mousedown on a cell at 0,0)
+    await clickCanvas(0, 0, true)
+    expect(wrapper.vm.activeFlowers.size).toBe(1)
 
-    // simulate click (mousedown on a cell)
-    await cells[0]!.trigger('mousedown')
-    expect(wrapper.findAll('.flower').length).toBe(1)
-
-    // Simulate dragging (global mousedown starts, then mouseenter on a cell)
+    // Simulate dragging (global mousedown starts, then mouseenter on cell 1,0)
     window.dispatchEvent(new MouseEvent('mousedown', { button: 0 }))
-    await cells[1]!.trigger('mouseenter')
+    await clickCanvas(1, 0, false)
 
-    expect(wrapper.findAll('.flower').length).toBe(2)
+    expect(wrapper.vm.activeFlowers.size).toBe(2)
   })
 
   it('can pick colors using number keys', async () => {
     // Press '1' for red brush (#ff0000)
     window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' }))
 
-    const cells = wrapper.findAll('.cell')
-    await cells[0]!.trigger('mousedown')
+    await clickCanvas(0, 0, true)
 
-    const flower = wrapper.find('.flower')
-    expect(flower.exists()).toBe(true)
-
-    // DOM typically normalizes #ff0000 to rgb(255, 0, 0)
-    const style = flower.attributes('style') || ''
-    expect(style.replace(/\s+/g, '')).toContain('background-color:rgb(255,0,0)')
+    const cell = wrapper.vm.grid[0]![0]!
+    expect(cell.flower).not.toBeNull()
+    expect(cell.flower?.color).toBe('#ff0000')
   })
 
   it('flowers age and die after MAX_FLOWER_AGE (100) ticks', async () => {
-    const cells = wrapper.findAll('.cell')
-    await cells[0]!.trigger('mousedown')
+    await clickCanvas(0, 0, true)
 
-    expect(wrapper.findAll('.flower').length).toBe(1)
+    expect(wrapper.vm.activeFlowers.size).toBe(1)
 
-    // Advance time by 99 ticks (99 * 100ms = 9900ms)
-    vi.advanceTimersByTime(9900)
+    // TICK_RATE_MS = 10 in App.vue
+    // Advance time by 99 ticks (99 * 10ms = 990ms)
+    vi.advanceTimersByTime(990)
     await wrapper.vm.$nextTick()
 
     // Our original cell should still have a flower (age 99)
-    expect(cells[0]!.find('.flower').exists()).toBe(true)
+    expect(wrapper.vm.activeFlowers.size).toBe(1)
+    expect(wrapper.vm.grid[0]![0]!.flower).not.toBeNull()
 
     // Advance to tick 101
-    vi.advanceTimersByTime(200)
+    vi.advanceTimersByTime(20)
     await wrapper.vm.$nextTick()
 
     // The original flower should have died
-    expect(cells[0]!.find('.flower').exists()).toBe(false)
+    expect(wrapper.vm.activeFlowers.size).toBe(0)
+    expect(wrapper.vm.grid[0]![0]!.flower).toBeNull()
   })
 
   it('cleans up ancestors that no longer exist on the grid', async () => {
     // Enable history tracking for this test
-    (wrapper.vm as any).isTrackingHistory = true
+    wrapper.vm.isTrackingHistory = true
     
     // Mock random to ensure pollination (always succeeds)
     const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0)
 
     // Plant two flowers next to each other
     // (0,0) and (1,0) are adjacent
-    const rows = wrapper.findAll('.row')
-    const cell00 = rows[0]!.findAll('.cell')[0]!
-    const cell10 = rows[0]!.findAll('.cell')[1]!
-
-    await cell00.trigger('mousedown')
-    await cell10.trigger('mousedown')
+    await clickCanvas(0, 0, true)
+    await clickCanvas(1, 0, true)
 
     // Trigger tick to allow pollination
-    vi.advanceTimersByTime(100)
+    vi.advanceTimersByTime(10)
     await wrapper.vm.$nextTick()
 
     const grid = wrapper.vm.grid
@@ -124,14 +149,12 @@ describe('App.vue', () => {
     }
 
     // Manually remove the parent at (0,0) safely
-    const firstRow = grid[0]
-    const firstCell = firstRow?.[0]
-    if (firstCell) {
-      firstCell.flower = null
-    }
+    const firstCell = grid[0]![0]!
+    firstCell.flower = null
+    wrapper.vm.activeFlowers.delete(firstCell)
 
     // Trigger another tick - this is when cleanup should happen
-    vi.advanceTimersByTime(100)
+    vi.advanceTimersByTime(10)
     await wrapper.vm.$nextTick()
 
     // Verify parent is no longer in ancestors
@@ -145,12 +168,11 @@ describe('App.vue', () => {
   it('does not track ancestry history by default', async () => {
     const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0)
 
-    const rows = wrapper.findAll('.row')
-    await rows[0]!.findAll('.cell')[0]!.trigger('mousedown')
-    await rows[0]!.findAll('.cell')[1]!.trigger('mousedown')
+    await clickCanvas(0, 0, true)
+    await clickCanvas(1, 0, true)
 
     // Trigger tick for pollination
-    vi.advanceTimersByTime(100)
+    vi.advanceTimersByTime(10)
     await wrapper.vm.$nextTick()
 
     const grid = wrapper.vm.grid
@@ -207,5 +229,74 @@ describe('App.vue', () => {
 
     // Counter should have been reset by the delay, so 5th press is now effectively the 1st
     expect(wrapper.find('.debug-menu').exists()).toBe(false)
+  })
+
+  it('maintains activeFlowers Set synchronization during plant and death', async () => {
+    // Plant two flowers
+    await clickCanvas(5, 5, true)
+    await clickCanvas(6, 6, true)
+    expect(wrapper.vm.activeFlowers.size).toBe(2)
+
+    // Verify they are in the set
+    const flowersArray = Array.from(wrapper.vm.activeFlowers) as Cell[]
+    expect(flowersArray.some((c: Cell) => c.x === 5 && c.y === 5)).toBe(true)
+    expect(flowersArray.some((c: Cell) => c.x === 6 && c.y === 6)).toBe(true)
+
+    // Manually kill one via tick-like logic
+    const targetCell = flowersArray.find((c: Cell) => c.x === 5 && c.y === 5)!
+    targetCell.flower = null
+    wrapper.vm.activeFlowers.delete(targetCell)
+
+    expect(wrapper.vm.activeFlowers.size).toBe(1)
+    expect(Array.from(wrapper.vm.activeFlowers as Set<Cell>).some((c: Cell) => c.x === 5 && c.y === 5)).toBe(false)
+  })
+
+  it('prunes ancestors deeper than 10 generations for performance', async () => {
+    wrapper.vm.isTrackingHistory = true
+    
+    // Plant the "ancestors" first so they aren't pruned for being empty
+    await clickCanvas(1, 1, true)
+    await clickCanvas(2, 2, true)
+    await clickCanvas(3, 3, true)
+    await clickCanvas(4, 4, true)
+    await clickCanvas(5, 5, true)
+
+    // Setup a new flower with a very deep ancestor record manually
+    await clickCanvas(0, 0, true)
+    const cell = wrapper.vm.grid[0]![0]!
+    cell.flower!.ancestors = {
+      '1,1': 1,
+      '2,2': 5,
+      '3,3': 10,
+      '4,4': 11, // This should be pruned (distance > 10)
+      '5,5': 15  // This should be pruned (distance > 10)
+    }
+
+    // Trigger tick to invoke cleanup logic
+    vi.advanceTimersByTime(10)
+    await wrapper.vm.$nextTick()
+
+    const ancestors = cell.flower!.ancestors
+    expect(ancestors).toHaveProperty('1,1')
+    expect(ancestors).toHaveProperty('3,3')
+    expect(ancestors).not.toHaveProperty('4,4')
+    expect(ancestors).not.toHaveProperty('5,5')
+  })
+
+  it('scales canvas dimensions based on devicePixelRatio', async () => {
+    // Mock high-DPI display
+    vi.stubGlobal('devicePixelRatio', 2)
+    
+    // Remount to trigger onMounted scaling logic
+    const wrapper2 = mount(App)
+    await wrapper2.vm.$nextTick()
+    
+    const canvas = wrapper2.find('canvas').element as HTMLCanvasElement
+    // GRID_PX_SIZE = 2396
+    // Expected width = 2396 * 2 = 4792
+    expect(canvas.width).toBe(2396 * 2)
+    expect(canvas.height).toBe(2396 * 2)
+    
+    vi.unstubAllGlobals()
   })
 })

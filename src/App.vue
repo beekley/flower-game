@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, shallowRef, triggerRef } from 'vue'
 import { hslToHex, mixColors } from './utils/colors'
 import type { FlowerSpawn, Cell } from './types'
 
@@ -10,7 +10,8 @@ const MAX_POLLINATION_CHANCE = 0.1
 const MAX_FLOWER_AGE = 100
 
 // --- State & Global Variables ---
-const grid = ref<Cell[][]>([])
+const grid = shallowRef<Cell[][]>([])
+const activeFlowers = ref<Set<Cell>>(new Set())
 const selectedCell = ref<{ x: number; y: number } | null>(null)
 const selectedBrushColor = ref<string | null>(null)
 const isMouseDown = ref(false)
@@ -21,8 +22,19 @@ const debugPressCount = ref(0)
 const lastDebugPressTime = ref(0)
 const usedMemory = ref(0)
 const isTrackingHistory = ref(false)
+const canvasRef = ref<HTMLCanvasElement | null>(null)
+const mousePos = ref<{ x: number; y: number } | null>(null)
+const tickCount = ref(0)
+const actualTicksPerSecond = ref(0)
+let lastTickRateUpdate = 0 // Initialized in onMounted
 let tickInterval: number | undefined
 let memoryInterval: number | undefined
+let rafId: number | undefined
+
+const CELL_SIZE = 20
+const CELL_GAP = 4
+const TOTAL_CELL_SIZE = CELL_SIZE + CELL_GAP
+const GRID_PX_SIZE = GRID_SIZE * TOTAL_CELL_SIZE - CELL_GAP
 
 const colorMap: Record<string, string> = {
   '1': '#ff0000',
@@ -69,33 +81,112 @@ const handleGlobalMouseUp = (e: MouseEvent) => {
   if (e.button === 0) isMouseDown.value = false
 }
 
-// --- Computed Properties & Dynamic Styling ---
 const ancestorHighlights = computed(() => {
   if (!selectedCell.value) return new Map<string, number>()
   const cell = grid.value[selectedCell.value.y]?.[selectedCell.value.x]
   return cell?.flower ? new Map(Object.entries(cell.flower.ancestors)) : new Map()
 })
 
-const getAncestorStyle = (distance: number) => {
+const getAncestorColor = (distance: number) => {
   const ratio = Math.min((distance - 1) / 4, 1)
   const r = 255 - 170 * ratio
   const g = 204 - 119 * ratio
   const b = 85 * ratio
-  const color = `rgb(${r}, ${g}, ${b})`
-  const opacity = Math.max(0.3, 1 - ratio * 0.5)
+  return { r, g, b, a: Math.max(0.3, 1 - ratio * 0.5) }
+}
 
-  return {
-    borderColor: color,
-    backgroundColor: `${color}33`,
-    boxShadow: `0 0 ${10 - ratio * 5}px rgba(${r}, ${g}, ${b}, ${opacity * 0.4})`,
+// --- Rendering: Canvas Draw Loop ---
+const draw = () => {
+  if (!canvasRef.value) return
+  const ctx = canvasRef.value.getContext('2d', { alpha: false })
+  if (!ctx) return
+
+  const dpr = window.devicePixelRatio || 1
+  ctx.save()
+  ctx.scale(dpr, dpr)
+
+  // Background
+  ctx.fillStyle = '#121212'
+  ctx.fillRect(0, 0, GRID_PX_SIZE, GRID_PX_SIZE)
+
+  const highlights = ancestorHighlights.value
+
+  for (let y = 0; y < GRID_SIZE; y++) {
+    const row = grid.value[y]
+    if (!row) continue
+    for (let x = 0; x < GRID_SIZE; x++) {
+      const cell = row[x]
+      if (!cell) continue
+      const px = x * TOTAL_CELL_SIZE
+      const py = y * TOTAL_CELL_SIZE
+
+      const isSelected = selectedCell.value?.x === x && selectedCell.value?.y === y
+      const ancestorDist = highlights.get(`${x},${y}`)
+      const isHovered = mousePos.value?.x === x && mousePos.value?.y === y
+
+      // Draw Cell Background
+      ctx.beginPath()
+      const radius = 6
+      ctx.roundRect(px, py, CELL_SIZE, CELL_SIZE, radius)
+
+      if (isSelected) {
+        ctx.fillStyle = '#444'
+        ctx.strokeStyle = '#ffffff'
+        ctx.lineWidth = 2
+        ctx.fill()
+        ctx.stroke()
+      } else if (ancestorDist !== undefined) {
+        const { r, g, b, a } = getAncestorColor(ancestorDist)
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.2)`
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${a})`
+        ctx.lineWidth = 1
+        ctx.fill()
+        ctx.stroke()
+      } else if (isHovered && !cell.flower) {
+        ctx.fillStyle = '#3a3a3a'
+        ctx.fill()
+      } else {
+        ctx.fillStyle = '#161616'
+        ctx.fill()
+      }
+
+      // Draw Flower
+      if (cell.flower) {
+        const centerX = px + CELL_SIZE / 2
+        const centerY = py + CELL_SIZE / 2
+        const flowerRadius = 7
+
+        // Shadow/Glow
+        ctx.shadowBlur = 10
+        ctx.shadowColor = `${cell.flower.color}88`
+
+        ctx.beginPath()
+        ctx.arc(centerX, centerY, flowerRadius, 0, Math.PI * 2)
+        ctx.fillStyle = cell.flower.color
+        ctx.fill()
+
+        // Reset shadow
+        ctx.shadowBlur = 0
+      }
+    }
   }
+
+  ctx.restore()
+  rafId = requestAnimationFrame(draw)
 }
 
 // --- Grid Initialization & Neighbors ---
 const initializeGrid = () => {
-  grid.value = Array.from({ length: GRID_SIZE }, (_, y) =>
-    Array.from({ length: GRID_SIZE }, (_, x) => ({ x, y, flower: null })),
-  )
+  const newGrid: Cell[][] = []
+  for (let y = 0; y < GRID_SIZE; y++) {
+    const row: Cell[] = []
+    for (let x = 0; x < GRID_SIZE; x++) {
+      row.push({ x, y, flower: null })
+    }
+    newGrid.push(row)
+  }
+  grid.value = newGrid
+  activeFlowers.value.clear()
 }
 
 const getAdjacentCells = (x: number, y: number) => {
@@ -177,89 +268,119 @@ const tick = () => {
   const newFlowers: FlowerSpawn[] = []
   const deadFlowers: { x: number; y: number }[] = []
 
-  for (let y = 0; y < GRID_SIZE; y++) {
-    for (let x = 0; x < GRID_SIZE; x++) {
-      const cell = grid.value[y]?.[x]
-      if (cell?.flower) processCellPollination(x, y, cell, deadFlowers, newFlowers)
+  for (const cell of activeFlowers.value) {
+    if (cell.flower) {
+      processCellPollination(cell.x, cell.y, cell, deadFlowers, newFlowers)
     }
   }
 
   for (const { x, y } of deadFlowers) {
-    const row = grid.value[y]
-    const cell = row?.[x]
+    const cell = grid.value[y]?.[x]
     if (cell) {
       cell.flower = null
+      activeFlowers.value.delete(cell)
       if (selectedCell.value?.x === x && selectedCell.value?.y === y) selectedCell.value = null
     }
   }
 
-  // --- Ancestor cleanup pass ---
+  // --- Optimized Ancestor cleanup pass ---
   if (isTrackingHistory.value) {
-    for (let y = 0; y < GRID_SIZE; y++) {
-      const row = grid.value[y]
-      if (!row) continue
-      for (let x = 0; x < GRID_SIZE; x++) {
-        const flower = row[x]?.flower
-        if (!flower) continue
+    for (const cell of activeFlowers.value) {
+      const flower = cell.flower
+      if (!flower) continue
 
-        const entries = Object.entries(flower.ancestors)
-        if (entries.length === 0) continue
+      const entries = Object.entries(flower.ancestors)
+      if (entries.length === 0) continue
 
-        const cleaned: Record<string, number> = {}
-        let changed = false
-        for (const [coord, dist] of entries) {
-          const parts = coord.split(',')
-          const ax = parseInt(parts[0] || '', 10)
-          const ay = parseInt(parts[1] || '', 10)
-
-          if (!isNaN(ax) && !isNaN(ay) && grid.value[ay]?.[ax]?.flower) {
-            cleaned[coord] = dist
-          } else {
-            changed = true
-          }
+      const cleaned: Record<string, number> = {}
+      let changed = false
+      for (const [coord, dist] of entries) {
+        if (dist > 10) {
+          // Prune deep ancestors for performance
+          changed = true
+          continue
         }
-        if (changed) flower.ancestors = cleaned
+        const parts = coord.split(',')
+        const ax = parseInt(parts[0] || '', 10)
+        const ay = parseInt(parts[1] || '', 10)
+
+        const ancestorCell = grid.value[ay]?.[ax]
+        if (ancestorCell?.flower) {
+          cleaned[coord] = dist
+        } else {
+          changed = true
+        }
       }
+      if (changed) flower.ancestors = cleaned
     }
   }
 
   for (const f of newFlowers) {
-    const row = grid.value[f.y]
-    const cell = row?.[f.x]
+    const cell = grid.value[f.y]?.[f.x]
     if (cell) {
       cell.flower = { color: f.color, ancestors: f.ancestors, age: f.age }
+      activeFlowers.value.add(cell)
     }
   }
+
+  tickCount.value++
+  triggerRef(grid)
 }
 
-const updateMemory = () => {
+const updateStats = (): void => {
   const perf = window.performance
   if (perf.memory) {
     usedMemory.value = Math.round(perf.memory.usedJSHeapSize / (1024 * 1024))
   }
+
+  // Calculate actual tick rate safely
+  const now = Date.now()
+  const elapsed = (now - lastTickRateUpdate) / 1000
+
+  if (elapsed > 0) {
+    actualTicksPerSecond.value = Math.round(tickCount.value / elapsed)
+  }
+
+  tickCount.value = 0
+  lastTickRateUpdate = now
 }
 
 // --- Component Lifecycle ---
 onMounted(() => {
   initializeGrid()
+  lastTickRateUpdate = Date.now()
+  tickCount.value = 0
   tickInterval = window.setInterval(tick, TICK_RATE_MS)
-  memoryInterval = window.setInterval(updateMemory, 1000)
+  memoryInterval = window.setInterval(updateStats, 1000)
   window.addEventListener('keydown', handleKeyDown)
   window.addEventListener('mousedown', handleGlobalMouseDown)
   window.addEventListener('mouseup', handleGlobalMouseUp)
 
+  if (canvasRef.value) {
+    const dpr = window.devicePixelRatio || 1
+    canvasRef.value.width = GRID_PX_SIZE * dpr
+    canvasRef.value.height = GRID_PX_SIZE * dpr
+    canvasRef.value.style.width = `${GRID_PX_SIZE}px`
+    canvasRef.value.style.height = `${GRID_PX_SIZE}px`
+    rafId = requestAnimationFrame(draw)
+  }
+
   nextTick(() => {
-    window.scrollTo({
-      top: (document.documentElement.scrollHeight - window.innerHeight) / 2,
-      left: (document.documentElement.scrollWidth - window.innerWidth) / 2,
-      behavior: 'auto',
-    })
+    const container = document.querySelector('.simulation-container')
+    if (container) {
+      window.scrollTo({
+        top: (container.scrollHeight - window.innerHeight) / 2,
+        left: (container.scrollWidth - window.innerWidth) / 2,
+        behavior: 'auto',
+      })
+    }
   })
 })
 
 onUnmounted(() => {
   if (tickInterval) clearInterval(tickInterval)
   if (memoryInterval) clearInterval(memoryInterval)
+  if (rafId) cancelAnimationFrame(rafId)
   window.removeEventListener('keydown', handleKeyDown)
   window.removeEventListener('mousedown', handleGlobalMouseDown)
   window.removeEventListener('mouseup', handleGlobalMouseUp)
@@ -277,6 +398,8 @@ const placeFlower = (x: number, y: number) => {
       rainbowHue.value = (rainbowHue.value + 15) % 360
     }
     row[x].flower = { color, ancestors: {}, age: 0 }
+    activeFlowers.value.add(row[x])
+    triggerRef(grid)
   }
 }
 
@@ -293,8 +416,31 @@ const handleCellInteract = (x: number, y: number, isClick: boolean) => {
   }
 }
 
+const handleCanvasInteraction = (e: MouseEvent, isClick: boolean) => {
+  if (!canvasRef.value) return
+  const rect = canvasRef.value.getBoundingClientRect()
+  const xPx = e.clientX - rect.left
+  const yPx = e.clientY - rect.top
+
+  const col = Math.floor(xPx / TOTAL_CELL_SIZE)
+  const row = Math.floor(yPx / TOTAL_CELL_SIZE)
+
+  if (col >= 0 && col < GRID_SIZE && row >= 0 && row < GRID_SIZE) {
+    mousePos.value = { x: col, y: row }
+    handleCellInteract(col, row, isClick)
+  } else {
+    mousePos.value = null
+  }
+}
+
+const handleCanvasMouseLeave = () => {
+  mousePos.value = null
+}
+
 defineExpose({
   grid,
+  activeFlowers,
+  isTrackingHistory,
 })
 </script>
 
@@ -310,35 +456,14 @@ html {
 
 <template>
   <div class="simulation-container">
-    <div class="grid">
-      <div v-for="(row, rowIndex) in grid" :key="rowIndex" class="row">
-        <div
-          v-for="(cell, colIndex) in row"
-          :key="`${rowIndex}-${colIndex}`"
-          class="cell"
-          :class="{
-            'has-flower': cell.flower,
-            'is-selected': selectedCell?.x === cell.x && selectedCell?.y === cell.y,
-            'is-ancestor': ancestorHighlights.has(`${cell.x},${cell.y}`),
-          }"
-          :style="
-            ancestorHighlights.has(`${cell.x},${cell.y}`)
-              ? getAncestorStyle(ancestorHighlights.get(`${cell.x},${cell.y}`)!)
-              : {}
-          "
-          @mousedown="handleCellInteract(cell.x, cell.y, true)"
-          @mouseenter="handleCellInteract(cell.x, cell.y, false)"
-        >
-          <div
-            v-if="cell.flower"
-            class="flower"
-            :style="{
-              backgroundColor: cell.flower.color,
-              boxShadow: `0 0 10px ${cell.flower.color}88`,
-            }"
-          ></div>
-        </div>
-      </div>
+    <div class="canvas-wrapper">
+      <canvas
+        ref="canvasRef"
+        class="flower-canvas"
+        @mousedown="handleCanvasInteraction($event, true)"
+        @mousemove="handleCanvasInteraction($event, false)"
+        @mouseleave="handleCanvasMouseLeave"
+      ></canvas>
     </div>
 
     <div v-if="showDebugMenu" class="debug-menu">
@@ -347,9 +472,17 @@ html {
         <span class="debug-value">{{ usedMemory > 0 ? usedMemory + ' MB' : 'N/A' }}</span>
       </div>
       <div class="debug-separator"></div>
+      <div class="debug-item">
+        <span class="debug-label">Tick Rate:</span>
+        <span class="debug-value">{{ actualTicksPerSecond }} tps</span>
+      </div>
+      <div class="debug-separator"></div>
       <div class="debug-item clickable" @click="isTrackingHistory = !isTrackingHistory">
         <span class="debug-label">Ancestry:</span>
-        <span class="debug-value" :class="{ 'status-on': isTrackingHistory, 'status-off': !isTrackingHistory }">
+        <span
+          class="debug-value"
+          :class="{ 'status-on': isTrackingHistory, 'status-off': !isTrackingHistory }"
+        >
           {{ isTrackingHistory ? 'ON' : 'OFF' }}
         </span>
       </div>
@@ -369,16 +502,21 @@ html {
   box-sizing: border-box;
 }
 
-.grid {
+.canvas-wrapper {
+  margin: 0 auto;
+  padding: 20px;
+  background: #1a1a1a;
+  border-radius: 16px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin: 0 auto; /* safely center without clipping */
+  justify-content: center;
+  align-items: center;
 }
 
-.row {
-  display: flex;
-  gap: 4px;
+.flower-canvas {
+  cursor: crosshair;
+  border-radius: 8px;
+  display: block;
 }
 
 .cell {
