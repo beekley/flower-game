@@ -2,12 +2,14 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 
 const GRID_SIZE = 50
-const TICK_RATE_MS = 1000
-const POLLINATION_CHANCE = 0.1
+const TICK_RATE_MS = 100
+const MAX_POLLINATION_CHANCE = 0.1
+const MAX_FLOWER_AGE = 100
 
 type Flower = {
   color: string
   ancestors: Record<string, number> // "x,y" -> generation distance
+  age: number
 }
 
 type Cell = {
@@ -147,7 +149,9 @@ const tick = () => {
     y: number
     color: string
     ancestors: Record<string, number>
+    age: number
   }[] = []
+  const deadFlowers: { x: number; y: number }[] = []
 
   for (let y = 0; y < GRID_SIZE; y++) {
     for (let x = 0; x < GRID_SIZE; x++) {
@@ -156,8 +160,22 @@ const tick = () => {
       const cell = row[x]
       if (!cell || !cell.flower) continue
 
+      cell.flower.age++
+
+      if (cell.flower.age > MAX_FLOWER_AGE) {
+        deadFlowers.push({ x, y })
+        continue
+      }
+
+      let pollinationChance = MAX_POLLINATION_CHANCE
+      if (cell.flower.age > MAX_FLOWER_AGE * 0.25) {
+        pollinationChance = MAX_POLLINATION_CHANCE * 0.05
+      } else if (cell.flower.age > MAX_FLOWER_AGE * 0.1) {
+        pollinationChance = MAX_POLLINATION_CHANCE * 0.1
+      }
+
       const adjacentFlowers = getAdjacentFlowers(x, y)
-      if (adjacentFlowers.length > 0 && Math.random() < POLLINATION_CHANCE) {
+      if (adjacentFlowers.length > 0 && Math.random() < pollinationChance) {
         const partner = adjacentFlowers[Math.floor(Math.random() * adjacentFlowers.length)]
         const emptyCells = getAdjacentEmptyCells(x, y)
         if (partner && partner.flower && emptyCells.length > 0) {
@@ -188,6 +206,7 @@ const tick = () => {
               y: spawnCell.y,
               color: newColor,
               ancestors: combinedAncestors,
+              age: 0,
             })
           }
         }
@@ -195,13 +214,24 @@ const tick = () => {
     }
   }
 
+  // Apply deaths
+  for (const { x, y } of deadFlowers) {
+    const row = grid.value[y]
+    if (row && row[x]) {
+      row[x].flower = null
+      if (selectedCell.value?.x === x && selectedCell.value?.y === y) {
+        selectedCell.value = null
+      }
+    }
+  }
+
   // Apply new flowers
-  for (const { x, y, color, ancestors } of newFlowers) {
+  for (const { x, y, color, ancestors, age } of newFlowers) {
     const row = grid.value[y]
     if (row) {
       const cell = row[x]
       if (cell && !cell.flower) {
-        cell.flower = { color, ancestors }
+        cell.flower = { color, ancestors, age }
       }
     }
   }
@@ -218,12 +248,12 @@ onMounted(() => {
   const row2 = grid.value[mid + 2]
 
   if (row1) {
-    if (row1[mid]) row1[mid]!.flower = { color: '#ff0000', ancestors: {} }
-    if (row1[mid + 1]) row1[mid + 1]!.flower = { color: '#0000ff', ancestors: {} }
+    if (row1[mid]) row1[mid]!.flower = { color: '#ff0000', ancestors: {}, age: 0 }
+    if (row1[mid + 1]) row1[mid + 1]!.flower = { color: '#0000ff', ancestors: {}, age: 0 }
   }
   if (row2) {
-    if (row2[mid]) row2[mid]!.flower = { color: '#00ff00', ancestors: {} }
-    if (row2[mid + 1]) row2[mid + 1]!.flower = { color: '#ffff00', ancestors: {} }
+    if (row2[mid]) row2[mid]!.flower = { color: '#00ff00', ancestors: {}, age: 0 }
+    if (row2[mid + 1]) row2[mid + 1]!.flower = { color: '#ffff00', ancestors: {}, age: 0 }
   }
 
   tickInterval = window.setInterval(tick, TICK_RATE_MS)
@@ -249,7 +279,7 @@ const placeFlower = (x: number, y: number) => {
     // Generate a random bright color
     const randomComponent = () => Math.floor(Math.random() * 256)
     const color = rgbToHex(randomComponent(), randomComponent(), randomComponent())
-    row[x].flower = { color, ancestors: {} }
+    row[x].flower = { color, ancestors: {}, age: 0 }
   }
 }
 
