@@ -27,6 +27,7 @@ const grid = ref<Cell[][]>([])
 const selectedCell = ref<{ x: number; y: number } | null>(null)
 const selectedBrushColor = ref<string | null>(null)
 const isMouseDown = ref(false)
+const isPaused = ref(false)
 const rainbowHue = ref(0)
 let tickInterval: number | undefined
 
@@ -44,6 +45,11 @@ const colorMap: Record<string, string> = {
 
 // --- Input Event Handlers ---
 const handleKeyDown = (e: KeyboardEvent) => {
+  if (e.code === 'Space') {
+    e.preventDefault()
+    isPaused.value = !isPaused.value
+    return
+  }
   const color = colorMap[e.key]
   if (e.key === '0') selectedBrushColor.value = null
   else if (color) selectedBrushColor.value = color
@@ -157,6 +163,8 @@ const processCellPollination = (
 
 // --- Main Simulation Loop (Tick) ---
 const tick = () => {
+  if (isPaused.value) return
+
   const newFlowers: FlowerSpawn[] = []
   const deadFlowers: { x: number; y: number }[] = []
 

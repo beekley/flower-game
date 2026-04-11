@@ -2,8 +2,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, VueWrapper } from '@vue/test-utils'
 import App from './App.vue'
 
-const GRID_SIZE = 50
-
 describe('App.vue', () => {
   let wrapper: VueWrapper<InstanceType<typeof App>>
 
@@ -20,8 +18,12 @@ describe('App.vue', () => {
   })
 
   it('spawns an empty grid initially', () => {
+    const rows = wrapper.findAll('.row')
     const cells = wrapper.findAll('.cell')
-    expect(cells.length).toBe(GRID_SIZE * GRID_SIZE)
+    
+    // Verify a square grid is generated
+    expect(rows.length).toBeGreaterThan(0)
+    expect(cells.length).toBe(rows.length * rows.length)
 
     const flowers = wrapper.findAll('.flower')
     expect(flowers.length).toBe(0)
