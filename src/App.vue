@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { hslToHex, mixColors } from './utils/colors'
 
 // --- Constants & Types ---
-const GRID_SIZE = 50
+const GRID_SIZE = 100
 const TICK_RATE_MS = 100
 const MAX_POLLINATION_CHANCE = 0.1
 const MAX_FLOWER_AGE = 100
@@ -31,9 +31,15 @@ const rainbowHue = ref(0)
 let tickInterval: number | undefined
 
 const colorMap: Record<string, string> = {
-  '1': '#ff0000', '2': '#ff8800', '3': '#ffff00',
-  '4': '#00ff00', '5': '#00ffff', '6': '#0000ff',
-  '7': '#8800ff', '8': '#ff00ff', '9': '#ffffff',
+  '1': '#ff0000',
+  '2': '#ff8800',
+  '3': '#ffff00',
+  '4': '#00ff00',
+  '5': '#00ffff',
+  '6': '#0000ff',
+  '7': '#8800ff',
+  '8': '#ff00ff',
+  '9': '#ffffff',
 }
 
 // --- Input Event Handlers ---
@@ -76,13 +82,18 @@ const getAncestorStyle = (distance: number) => {
 // --- Grid Initialization & Neighbors ---
 const initializeGrid = () => {
   grid.value = Array.from({ length: GRID_SIZE }, (_, y) =>
-    Array.from({ length: GRID_SIZE }, (_, x) => ({ x, y, flower: null }))
+    Array.from({ length: GRID_SIZE }, (_, x) => ({ x, y, flower: null })),
   )
 }
 
 const getAdjacentCells = (x: number, y: number) => {
   const neighbors: Cell[] = []
-  for (const { dx, dy } of [{ dx: 0, dy: -1 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }, { dx: 1, dy: 0 }]) {
+  for (const { dx, dy } of [
+    { dx: 0, dy: -1 },
+    { dx: 0, dy: 1 },
+    { dx: -1, dy: 0 },
+    { dx: 1, dy: 0 },
+  ]) {
     const cell = grid.value[y + dy]?.[x + dx]
     if (cell) neighbors.push(cell)
   }
@@ -95,7 +106,7 @@ const processCellPollination = (
   y: number,
   cell: Cell,
   deadFlowers: { x: number; y: number }[],
-  newFlowers: FlowerSpawn[]
+  newFlowers: FlowerSpawn[],
 ) => {
   cell.flower!.age++
 
@@ -218,7 +229,8 @@ const handleCellInteract = (x: number, y: number, isClick: boolean) => {
   if (!cell) return
 
   if (isClick && cell.flower) {
-    selectedCell.value = selectedCell.value?.x === x && selectedCell.value?.y === y ? null : { x, y }
+    selectedCell.value =
+      selectedCell.value?.x === x && selectedCell.value?.y === y ? null : { x, y }
   } else if (isClick || isMouseDown.value) {
     placeFlower(x, y)
     if (isClick) selectedCell.value = null
@@ -296,9 +308,9 @@ html {
 }
 
 .cell {
-  width: 40px;
-  height: 40px;
-  background-color: #2a2a2a;
+  width: 20px;
+  height: 20px;
+  background-color: #161616;
   border-radius: 6px;
   cursor: pointer;
   display: flex;
@@ -310,7 +322,7 @@ html {
     border 0.2s,
     box-shadow 0.2s;
   box-sizing: border-box;
-  border: 2px solid transparent;
+  border: 1px solid transparent;
 }
 
 .cell.is-selected {
@@ -329,8 +341,8 @@ html {
 }
 
 .flower {
-  width: 24px;
-  height: 24px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
