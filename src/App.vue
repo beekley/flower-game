@@ -22,6 +22,7 @@ type Cell = {
 const grid = ref<Cell[][]>([])
 const selectedCell = ref<{ x: number; y: number } | null>(null)
 const selectedBrushColor = ref<string | null>(null)
+const isMouseDown = ref(false)
 
 const colorMap: Record<string, string> = {
   '1': '#ff0000', // Red
@@ -85,6 +86,21 @@ const initializeGrid = () => {
     newGrid.push(row)
   }
   grid.value = newGrid
+}
+
+const rainbowHue = ref(0)
+
+const hslToHex = (h: number, s: number, l: number) => {
+  l /= 100
+  const a = (s * Math.min(l, 1 - l)) / 100
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12
+    const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1)
+    return Math.round(255 * color)
+      .toString(16)
+      .padStart(2, '0')
+  }
+  return `#${f(0)}${f(8)}${f(4)}`
 }
 
 // Color mixing utility
@@ -261,25 +277,20 @@ const tick = () => {
 
 let tickInterval: number | undefined
 
+const handleGlobalMouseDown = (e: MouseEvent) => {
+  if (e.button === 0) isMouseDown.value = true
+}
+const handleGlobalMouseUp = (e: MouseEvent) => {
+  if (e.button === 0) isMouseDown.value = false
+}
+
 onMounted(() => {
   initializeGrid()
 
-  // Plant some initial flowers
-  const mid = Math.floor(GRID_SIZE / 2)
-  const row1 = grid.value[mid]
-  const row2 = grid.value[mid + 2]
-
-  if (row1) {
-    if (row1[mid]) row1[mid]!.flower = { color: '#ff0000', ancestors: {}, age: 0 }
-    if (row1[mid + 1]) row1[mid + 1]!.flower = { color: '#0000ff', ancestors: {}, age: 0 }
-  }
-  if (row2) {
-    if (row2[mid]) row2[mid]!.flower = { color: '#00ff00', ancestors: {}, age: 0 }
-    if (row2[mid + 1]) row2[mid + 1]!.flower = { color: '#ffff00', ancestors: {}, age: 0 }
-  }
-
   tickInterval = window.setInterval(tick, TICK_RATE_MS)
   window.addEventListener('keydown', handleKeyDown)
+  window.addEventListener('mousedown', handleGlobalMouseDown)
+  window.addEventListener('mouseup', handleGlobalMouseUp)
 
   nextTick(() => {
     const scrollX = (document.documentElement.scrollWidth - window.innerWidth) / 2
@@ -295,6 +306,8 @@ onMounted(() => {
 onUnmounted(() => {
   if (tickInterval) clearInterval(tickInterval)
   window.removeEventListener('keydown', handleKeyDown)
+  window.removeEventListener('mousedown', handleGlobalMouseDown)
+  window.removeEventListener('mouseup', handleGlobalMouseUp)
 })
 
 const placeFlower = (x: number, y: number) => {
@@ -304,28 +317,29 @@ const placeFlower = (x: number, y: number) => {
     if (selectedBrushColor.value) {
       color = selectedBrushColor.value
     } else {
-      // Generate a random bright color
-      const randomComponent = () => Math.floor(Math.random() * 256)
-      color = rgbToHex(randomComponent(), randomComponent(), randomComponent())
+      // Generate next rainbow color
+      color = hslToHex(rainbowHue.value, 100, 50)
+      rainbowHue.value = (rainbowHue.value + 15) % 360
     }
     row[x].flower = { color, ancestors: {}, age: 0 }
   }
 }
 
-const handleCellClick = (x: number, y: number) => {
+const handleCellInteract = (x: number, y: number, isClick: boolean) => {
   const cell = grid.value[y]?.[x]
   if (!cell) return
 
-  if (cell.flower) {
-    // If clicking already selected cell, deselect
+  // Only handle selection logic on an explicit click of an existing flower
+  if (isClick && cell.flower) {
     if (selectedCell.value?.x === x && selectedCell.value?.y === y) {
       selectedCell.value = null
     } else {
       selectedCell.value = { x, y }
     }
-  } else {
+  } else if (isClick || isMouseDown.value) {
+    // Paint if dragging or explicitly clicking
     placeFlower(x, y)
-    selectedCell.value = null
+    if (isClick) selectedCell.value = null
   }
 }
 </script>
@@ -342,6 +356,12 @@ html {
 
 <template>
   <div class="simulation-container">
+    <div class="controls">
+      Current Brush: 
+      <span v-if="selectedBrushColor" class="brush-swatch" :style="{ backgroundColor: selectedBrushColor }"></span>
+      <span v-else class="brush-text rainbow-text">Rainbow Flow</span>
+      <span class="brush-hint"> (Keys 1-9 manually pick a color, 0 sets rainbow)</span>
+    </div>
     <div class="grid">
       <div v-for="(row, rowIndex) in grid" :key="rowIndex" class="row">
         <div
@@ -358,7 +378,8 @@ html {
               ? getAncestorStyle(ancestorHighlights.get(`${cell.x},${cell.y}`)!)
               : {}
           "
-          @click="handleCellClick(cell.x, cell.y)"
+          @mousedown="handleCellInteract(cell.x, cell.y, true)"
+          @mouseenter="handleCellInteract(cell.x, cell.y, false)"
         >
           <div
             v-if="cell.flower"
@@ -384,6 +405,40 @@ html {
   min-height: 100vh;
   padding: 2rem;
   box-sizing: border-box;
+}
+
+.controls {
+  margin-bottom: 1rem;
+  text-align: center;
+  font-size: 0.9rem;
+}
+
+.brush-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  margin: 0 4px;
+}
+
+.brush-text {
+  font-weight: bold;
+}
+.rainbow-text {
+  background: linear-gradient(90deg, #ff0000, #ffaa00, #ffff00, #00ff00, #00ffff, #0000ff, #aa00ff, #ff00ff);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: rainbowShift 3s linear infinite;
+  background-size: 200% 100%;
+}
+
+@keyframes rainbowShift {
+  0% { background-position: 0% 50%; }
+  100% { background-position: -200% 50%; }
+}
+
+.brush-hint {
+  color: #888;
 }
 
 .grid {
