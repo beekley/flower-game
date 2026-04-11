@@ -81,6 +81,9 @@ describe('App.vue', () => {
   })
 
   it('cleans up ancestors that no longer exist on the grid', async () => {
+    // Enable history tracking for this test
+    (wrapper.vm as any).isTrackingHistory = true
+    
     // Mock random to ensure pollination (always succeeds)
     const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0)
 
@@ -134,6 +137,39 @@ describe('App.vue', () => {
     // Verify parent is no longer in ancestors
     if (childFlower) {
       expect(childFlower.ancestors).not.toHaveProperty(parentCoord)
+    }
+
+    randomSpy.mockRestore()
+  })
+
+  it('does not track ancestry history by default', async () => {
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0)
+
+    const rows = wrapper.findAll('.row')
+    await rows[0]!.findAll('.cell')[0]!.trigger('mousedown')
+    await rows[0]!.findAll('.cell')[1]!.trigger('mousedown')
+
+    // Trigger tick for pollination
+    vi.advanceTimersByTime(100)
+    await wrapper.vm.$nextTick()
+
+    const grid = wrapper.vm.grid
+    let childFlower: Flower | null = null
+
+    // Look for a spawned child (should be near the parents at x=0,1 y=0)
+    for (const row of grid) {
+      for (const cell of row) {
+        if (cell.flower && (cell.x !== 0 || cell.y !== 0) && (cell.x !== 1 || cell.y !== 0)) {
+          childFlower = cell.flower
+          break
+        }
+      }
+      if (childFlower) break
+    }
+
+    expect(childFlower).not.toBeNull()
+    if (childFlower) {
+      expect(Object.keys(childFlower.ancestors).length).toBe(0)
     }
 
     randomSpy.mockRestore()

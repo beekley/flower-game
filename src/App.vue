@@ -20,6 +20,7 @@ const showDebugMenu = ref(false)
 const debugPressCount = ref(0)
 const lastDebugPressTime = ref(0)
 const usedMemory = ref(0)
+const isTrackingHistory = ref(false)
 let tickInterval: number | undefined
 let memoryInterval: number | undefined
 
@@ -144,18 +145,21 @@ const processCellPollination = (
   if (!partner || !spawnCell) return
 
   const combinedAncestors: Record<string, number> = {}
-  const addAncestors = (src: Record<string, number>) => {
-    for (const [coord, dist] of Object.entries(src)) {
-      if (!combinedAncestors[coord] || dist + 1 < combinedAncestors[coord]) {
-        combinedAncestors[coord] = dist + 1
+
+  if (isTrackingHistory.value) {
+    const addAncestors = (src: Record<string, number>) => {
+      for (const [coord, dist] of Object.entries(src)) {
+        if (!combinedAncestors[coord] || dist + 1 < combinedAncestors[coord]) {
+          combinedAncestors[coord] = dist + 1
+        }
       }
     }
-  }
 
-  addAncestors(cell.flower!.ancestors)
-  addAncestors(partner.flower!.ancestors)
-  combinedAncestors[`${cell.x},${cell.y}`] = 1
-  combinedAncestors[`${partner.x},${partner.y}`] = 1
+    addAncestors(cell.flower!.ancestors)
+    addAncestors(partner.flower!.ancestors)
+    combinedAncestors[`${cell.x},${cell.y}`] = 1
+    combinedAncestors[`${partner.x},${partner.y}`] = 1
+  }
 
   newFlowers.push({
     x: spawnCell.x,
@@ -190,30 +194,32 @@ const tick = () => {
   }
 
   // --- Ancestor cleanup pass ---
-  for (let y = 0; y < GRID_SIZE; y++) {
-    const row = grid.value[y]
-    if (!row) continue
-    for (let x = 0; x < GRID_SIZE; x++) {
-      const flower = row[x]?.flower
-      if (!flower) continue
+  if (isTrackingHistory.value) {
+    for (let y = 0; y < GRID_SIZE; y++) {
+      const row = grid.value[y]
+      if (!row) continue
+      for (let x = 0; x < GRID_SIZE; x++) {
+        const flower = row[x]?.flower
+        if (!flower) continue
 
-      const entries = Object.entries(flower.ancestors)
-      if (entries.length === 0) continue
+        const entries = Object.entries(flower.ancestors)
+        if (entries.length === 0) continue
 
-      const cleaned: Record<string, number> = {}
-      let changed = false
-      for (const [coord, dist] of entries) {
-        const parts = coord.split(',')
-        const ax = parseInt(parts[0] || '', 10)
-        const ay = parseInt(parts[1] || '', 10)
+        const cleaned: Record<string, number> = {}
+        let changed = false
+        for (const [coord, dist] of entries) {
+          const parts = coord.split(',')
+          const ax = parseInt(parts[0] || '', 10)
+          const ay = parseInt(parts[1] || '', 10)
 
-        if (!isNaN(ax) && !isNaN(ay) && grid.value[ay]?.[ax]?.flower) {
-          cleaned[coord] = dist
-        } else {
-          changed = true
+          if (!isNaN(ax) && !isNaN(ay) && grid.value[ay]?.[ax]?.flower) {
+            cleaned[coord] = dist
+          } else {
+            changed = true
+          }
         }
+        if (changed) flower.ancestors = cleaned
       }
-      if (changed) flower.ancestors = cleaned
     }
   }
 
@@ -337,8 +343,15 @@ html {
 
     <div v-if="showDebugMenu" class="debug-menu">
       <div class="debug-item">
-        <span class="debug-label">Memory Usage:</span>
+        <span class="debug-label">Memory:</span>
         <span class="debug-value">{{ usedMemory > 0 ? usedMemory + ' MB' : 'N/A' }}</span>
+      </div>
+      <div class="debug-separator"></div>
+      <div class="debug-item clickable" @click="isTrackingHistory = !isTrackingHistory">
+        <span class="debug-label">Ancestry:</span>
+        <span class="debug-value" :class="{ 'status-on': isTrackingHistory, 'status-off': !isTrackingHistory }">
+          {{ isTrackingHistory ? 'ON' : 'OFF' }}
+        </span>
       </div>
     </div>
   </div>
@@ -452,6 +465,33 @@ html {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   font-size: 0.9rem;
   font-weight: 600;
+}
+
+.debug-item.clickable {
+  cursor: pointer;
+  pointer-events: auto;
+  transition: opacity 0.2s;
+}
+
+.debug-item.clickable:hover {
+  opacity: 0.8;
+}
+
+.debug-separator {
+  width: 1px;
+  height: 1.5rem;
+  background: rgba(255, 255, 255, 0.1);
+  align-self: center;
+}
+
+.status-on {
+  color: #00ff88 !important;
+  text-shadow: 0 0 10px rgba(0, 255, 136, 0.3);
+}
+
+.status-off {
+  color: #ff4444 !important;
+  text-shadow: 0 0 10px rgba(255, 68, 68, 0.3);
 }
 
 @keyframes slideUp {
