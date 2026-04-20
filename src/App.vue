@@ -1,27 +1,28 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, shallowRef, triggerRef } from 'vue'
-import { hslToHex, mixColors } from './utils/colors'
-import type { FlowerSpawn, Cell } from './types'
+import type { Cell, GameSystem } from './types'
+import { FlowerSystem } from './systems/FlowerSystem'
 
 // --- Constants ---
 const GRID_SIZE = 100
 const TICK_RATE_MS = 100
-const MAX_POLLINATION_CHANCE = 0.1
-const MAX_FLOWER_AGE = 100
+
+// --- Systems Setup ---
+const availableSystems: GameSystem[] = [FlowerSystem]
+const currentSystemIndex = ref(0)
+const currentSystem = computed(() => availableSystems[currentSystemIndex.value]!)
 
 // --- State & Global Variables ---
 const grid = shallowRef<Cell[][]>([])
-const activeFlowers = ref<Set<Cell>>(new Set())
+const activeCells = ref<Set<Cell>>(new Set())
 const selectedCell = ref<{ x: number; y: number } | null>(null)
 const selectedBrushColor = ref<string | null>(null)
 const isMouseDown = ref(false)
 const isPaused = ref(false)
-const rainbowHue = ref(0)
 const showDebugMenu = ref(false)
 const debugPressCount = ref(0)
 const lastDebugPressTime = ref(0)
 const usedMemory = ref(0)
-const isTrackingHistory = ref(false)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const mousePos = ref<{ x: number; y: number } | null>(null)
 const tickCount = ref(0)
@@ -81,20 +82,6 @@ const handleGlobalMouseUp = (e: MouseEvent) => {
   if (e.button === 0) isMouseDown.value = false
 }
 
-const ancestorHighlights = computed(() => {
-  if (!selectedCell.value) return new Map<string, number>()
-  const cell = grid.value[selectedCell.value.y]?.[selectedCell.value.x]
-  return cell?.flower ? new Map(Object.entries(cell.flower.ancestors)) : new Map()
-})
-
-const getAncestorColor = (distance: number) => {
-  const ratio = Math.min((distance - 1) / 4, 1)
-  const r = 255 - 170 * ratio
-  const g = 204 - 119 * ratio
-  const b = 85 * ratio
-  return { r, g, b, a: Math.max(0.3, 1 - ratio * 0.5) }
-}
-
 // --- Rendering: Canvas Draw Loop ---
 const draw = () => {
   if (!canvasRef.value) return
@@ -109,8 +96,6 @@ const draw = () => {
   ctx.fillStyle = '#121212'
   ctx.fillRect(0, 0, GRID_PX_SIZE, GRID_PX_SIZE)
 
-  const highlights = ancestorHighlights.value
-
   for (let y = 0; y < GRID_SIZE; y++) {
     const row = grid.value[y]
     if (!row) continue
@@ -121,53 +106,40 @@ const draw = () => {
       const py = y * TOTAL_CELL_SIZE
 
       const isSelected = selectedCell.value?.x === x && selectedCell.value?.y === y
-      const ancestorDist = highlights.get(`${x},${y}`)
       const isHovered = mousePos.value?.x === x && mousePos.value?.y === y
 
-      // Draw Cell Background
-      ctx.beginPath()
-      const radius = 6
-      ctx.roundRect(px, py, CELL_SIZE, CELL_SIZE, radius)
-
-      if (isSelected) {
-        ctx.fillStyle = '#444'
-        ctx.strokeStyle = '#ffffff'
-        ctx.lineWidth = 2
-        ctx.fill()
-        ctx.stroke()
-      } else if (ancestorDist !== undefined) {
-        const { r, g, b, a } = getAncestorColor(ancestorDist)
-        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.2)`
-        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${a})`
-        ctx.lineWidth = 1
-        ctx.fill()
-        ctx.stroke()
-      } else if (isHovered && !cell.flower) {
-        ctx.fillStyle = '#3a3a3a'
-        ctx.fill()
-      } else {
-        ctx.fillStyle = '#161616'
-        ctx.fill()
+      let drawnCustomBg = false
+      if (currentSystem.value.drawCustomBackground) {
+        drawnCustomBg = currentSystem.value.drawCustomBackground(ctx, cell, px, py, CELL_SIZE, {
+          isSelected,
+          isHovered,
+          selectedCell: selectedCell.value,
+          grid: grid.value,
+        })
       }
 
-      // Draw Flower
-      if (cell.flower) {
-        const centerX = px + CELL_SIZE / 2
-        const centerY = py + CELL_SIZE / 2
-        const flowerRadius = 7
-
-        // Shadow/Glow
-        ctx.shadowBlur = 10
-        ctx.shadowColor = `${cell.flower.color}88`
-
+      if (!drawnCustomBg) {
+        // Draw Cell Background
         ctx.beginPath()
-        ctx.arc(centerX, centerY, flowerRadius, 0, Math.PI * 2)
-        ctx.fillStyle = cell.flower.color
-        ctx.fill()
+        const radius = 6
+        ctx.roundRect(px, py, CELL_SIZE, CELL_SIZE, radius)
 
-        // Reset shadow
-        ctx.shadowBlur = 0
+        if (isSelected) {
+          ctx.fillStyle = '#444'
+          ctx.strokeStyle = '#ffffff'
+          ctx.lineWidth = 2
+          ctx.fill()
+          ctx.stroke()
+        } else if (isHovered && !currentSystem.value.hasEntity(cell)) {
+          ctx.fillStyle = '#3a3a3a'
+          ctx.fill()
+        } else {
+          ctx.fillStyle = '#161616'
+          ctx.fill()
+        }
       }
+
+      currentSystem.value.drawCell(ctx, cell, px, py, CELL_SIZE)
     }
   }
 
@@ -181,148 +153,18 @@ const initializeGrid = () => {
   for (let y = 0; y < GRID_SIZE; y++) {
     const row: Cell[] = []
     for (let x = 0; x < GRID_SIZE; x++) {
-      row.push({ x, y, flower: null })
+      row.push({ x, y, data: {} })
     }
     newGrid.push(row)
   }
   grid.value = newGrid
-  activeFlowers.value.clear()
-}
-
-const getAdjacentCells = (x: number, y: number) => {
-  const neighbors: Cell[] = []
-  for (const { dx, dy } of [
-    { dx: 0, dy: -1 },
-    { dx: 0, dy: 1 },
-    { dx: -1, dy: 0 },
-    { dx: 1, dy: 0 },
-  ]) {
-    const cell = grid.value[y + dy]?.[x + dx]
-    if (cell) neighbors.push(cell)
-  }
-  return neighbors
-}
-
-// --- Simulation Core: Flow & Pollination ---
-const processCellPollination = (
-  x: number,
-  y: number,
-  cell: Cell,
-  deadFlowers: { x: number; y: number }[],
-  newFlowers: FlowerSpawn[],
-) => {
-  cell.flower!.age++
-
-  if (cell.flower!.age > MAX_FLOWER_AGE) {
-    deadFlowers.push({ x, y })
-    return
-  }
-
-  let chance = MAX_POLLINATION_CHANCE
-  if (cell.flower!.age > MAX_FLOWER_AGE * 0.25) chance *= 0.05
-  else if (cell.flower!.age > MAX_FLOWER_AGE * 0.1) chance *= 0.1
-
-  if (Math.random() >= chance) return
-
-  const neighbors = getAdjacentCells(x, y)
-  const adjacentFlowers = neighbors.filter((n) => n.flower)
-  const emptyCells = neighbors.filter((n) => !n.flower)
-
-  if (adjacentFlowers.length === 0 || emptyCells.length === 0) return
-
-  const partner = adjacentFlowers[Math.floor(Math.random() * adjacentFlowers.length)]
-  const spawnCell = emptyCells[Math.floor(Math.random() * emptyCells.length)]
-
-  if (!partner || !spawnCell) return
-
-  const combinedAncestors: Record<string, number> = {}
-
-  if (isTrackingHistory.value) {
-    const addAncestors = (src: Record<string, number>) => {
-      for (const [coord, dist] of Object.entries(src)) {
-        if (!combinedAncestors[coord] || dist + 1 < combinedAncestors[coord]) {
-          combinedAncestors[coord] = dist + 1
-        }
-      }
-    }
-
-    addAncestors(cell.flower!.ancestors)
-    addAncestors(partner.flower!.ancestors)
-    combinedAncestors[`${cell.x},${cell.y}`] = 1
-    combinedAncestors[`${partner.x},${partner.y}`] = 1
-  }
-
-  newFlowers.push({
-    x: spawnCell.x,
-    y: spawnCell.y,
-    color: mixColors(cell.flower!.color, partner.flower!.color),
-    ancestors: combinedAncestors,
-    age: 0,
-  })
+  activeCells.value.clear()
 }
 
 // --- Main Simulation Loop (Tick) ---
 const tick = () => {
   if (isPaused.value) return
-
-  const newFlowers: FlowerSpawn[] = []
-  const deadFlowers: { x: number; y: number }[] = []
-
-  for (const cell of activeFlowers.value) {
-    if (cell.flower) {
-      processCellPollination(cell.x, cell.y, cell, deadFlowers, newFlowers)
-    }
-  }
-
-  for (const { x, y } of deadFlowers) {
-    const cell = grid.value[y]?.[x]
-    if (cell) {
-      cell.flower = null
-      activeFlowers.value.delete(cell)
-      if (selectedCell.value?.x === x && selectedCell.value?.y === y) selectedCell.value = null
-    }
-  }
-
-  // --- Optimized Ancestor cleanup pass ---
-  if (isTrackingHistory.value) {
-    for (const cell of activeFlowers.value) {
-      const flower = cell.flower
-      if (!flower) continue
-
-      const entries = Object.entries(flower.ancestors)
-      if (entries.length === 0) continue
-
-      const cleaned: Record<string, number> = {}
-      let changed = false
-      for (const [coord, dist] of entries) {
-        if (dist > 10) {
-          // Prune deep ancestors for performance
-          changed = true
-          continue
-        }
-        const parts = coord.split(',')
-        const ax = parseInt(parts[0] || '', 10)
-        const ay = parseInt(parts[1] || '', 10)
-
-        const ancestorCell = grid.value[ay]?.[ax]
-        if (ancestorCell?.flower) {
-          cleaned[coord] = dist
-        } else {
-          changed = true
-        }
-      }
-      if (changed) flower.ancestors = cleaned
-    }
-  }
-
-  for (const f of newFlowers) {
-    const cell = grid.value[f.y]?.[f.x]
-    if (cell) {
-      cell.flower = { color: f.color, ancestors: f.ancestors, age: f.age }
-      activeFlowers.value.add(cell)
-    }
-  }
-
+  currentSystem.value.tick(grid.value, activeCells.value)
   tickCount.value++
   triggerRef(grid)
 }
@@ -386,32 +228,21 @@ onUnmounted(() => {
   window.removeEventListener('mouseup', handleGlobalMouseUp)
 })
 
-// --- User Interaction (Painting & Clicking) ---
-const placeFlower = (x: number, y: number) => {
-  const row = grid.value[y]
-  if (row && row[x] && !row[x].flower) {
-    let color: string
-    if (selectedBrushColor.value) {
-      color = selectedBrushColor.value
-    } else {
-      color = hslToHex(rainbowHue.value, 100, 50)
-      rainbowHue.value = (rainbowHue.value + 15) % 360
-    }
-    row[x].flower = { color, ancestors: {}, age: 0 }
-    activeFlowers.value.add(row[x])
-    triggerRef(grid)
-  }
-}
-
+// --- User Interaction ---
 const handleCellInteract = (x: number, y: number, isClick: boolean) => {
   const cell = grid.value[y]?.[x]
   if (!cell) return
 
-  if (isClick && cell.flower) {
+  const hasSystemEntity = currentSystem.value.hasEntity(cell)
+
+  if (isClick && hasSystemEntity) {
     selectedCell.value =
       selectedCell.value?.x === x && selectedCell.value?.y === y ? null : { x, y }
   } else if (isClick || isMouseDown.value) {
-    placeFlower(x, y)
+    if (!hasSystemEntity) {
+      currentSystem.value.placeEntity(cell, selectedBrushColor.value, activeCells.value)
+      triggerRef(grid)
+    }
     if (isClick) selectedCell.value = null
   }
 }
@@ -439,8 +270,7 @@ const handleCanvasMouseLeave = () => {
 
 defineExpose({
   grid,
-  activeFlowers,
-  isTrackingHistory,
+  activeCells,
 })
 </script>
 
@@ -468,6 +298,15 @@ html {
 
     <div v-if="showDebugMenu" class="debug-menu">
       <div class="debug-item">
+        <span class="debug-label">System:</span>
+        <select class="debug-select" v-model="currentSystemIndex">
+          <option v-for="(sys, idx) in availableSystems" :key="sys.name" :value="idx">
+            {{ sys.name }}
+          </option>
+        </select>
+      </div>
+      <div class="debug-separator"></div>
+      <div class="debug-item">
         <span class="debug-label">Memory:</span>
         <span class="debug-value">{{ usedMemory > 0 ? usedMemory + ' MB' : 'N/A' }}</span>
       </div>
@@ -476,16 +315,19 @@ html {
         <span class="debug-label">Tick Rate:</span>
         <span class="debug-value">{{ actualTicksPerSecond }} tps</span>
       </div>
-      <div class="debug-separator"></div>
-      <div class="debug-item clickable" @click="isTrackingHistory = !isTrackingHistory">
-        <span class="debug-label">Ancestry:</span>
-        <span
-          class="debug-value"
-          :class="{ 'status-on': isTrackingHistory, 'status-off': !isTrackingHistory }"
+      <template v-if="currentSystem.debugItems && currentSystem.debugItems().length > 0">
+        <div class="debug-separator"></div>
+        <div
+          v-for="(item, index) in currentSystem.debugItems()"
+          :key="index"
+          class="debug-item"
+          :class="{ clickable: !!item.onClick }"
+          @click="item.onClick && item.onClick()"
         >
-          {{ isTrackingHistory ? 'ON' : 'OFF' }}
-        </span>
-      </div>
+          <span class="debug-label">{{ item.label }}</span>
+          <span class="debug-value" :class="item.class">{{ item.value }}</span>
+        </div>
+      </template>
     </div>
   </div>
 </template>
@@ -603,6 +445,21 @@ html {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   font-size: 0.9rem;
   font-weight: 600;
+}
+
+.debug-select {
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.85rem;
+  cursor: pointer;
+  outline: none;
+}
+.debug-select:focus {
+  border-color: rgba(255, 255, 255, 0.5);
 }
 
 .debug-item.clickable {
