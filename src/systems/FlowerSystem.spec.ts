@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { FlowerSystem, setTrackingHistory, type Flower } from './FlowerSystem'
-import type { Cell } from '../types'
+import { FlowerSystem, setTrackingHistory } from './FlowerSystem'
+import type { Cell, Flower } from '../types'
 
 describe('FlowerSystem', () => {
   let grid: Cell[][]
@@ -11,7 +11,7 @@ describe('FlowerSystem', () => {
     for (let y = 0; y < 10; y++) {
       const row: Cell[] = []
       for (let x = 0; x < 10; x++) {
-        row.push({ x, y, data: {} })
+        row.push({ x, y })
       }
       grid.push(row)
     }
@@ -27,8 +27,7 @@ describe('FlowerSystem', () => {
     expect(activeCells.has(cell)).toBe(true)
     expect(FlowerSystem.hasEntity(cell)).toBe(true)
 
-    const flower = cell.data.flower as Flower
-    expect(flower).not.toBeUndefined()
+    const flower = cell as Flower
     expect(flower.color).toBe('#ff0000')
     expect(flower.age).toBe(0)
   })
@@ -92,7 +91,7 @@ describe('FlowerSystem', () => {
     }
     expect(childCell).not.toBeNull()
 
-    let childFlower = childCell!.data.flower as Flower
+    let childFlower = childCell as Flower
     expect(childFlower.ancestors).toHaveProperty('0,0')
 
     // Remove parent 1
@@ -100,7 +99,7 @@ describe('FlowerSystem', () => {
     FlowerSystem.tick(grid, activeCells)
 
     // Ancestor reference should be pruned
-    childFlower = childCell!.data.flower as Flower
+    childFlower = childCell as Flower
     expect(childFlower.ancestors).not.toHaveProperty('0,0')
     // Parent 2 should still be tracked
     expect(childFlower.ancestors).toHaveProperty('1,0')
@@ -125,7 +124,7 @@ describe('FlowerSystem', () => {
     FlowerSystem.placeEntity(anc4, '#ffffff', activeCells)
     FlowerSystem.placeEntity(anc5, '#ffffff', activeCells)
 
-    const flower = cell.data.flower as Flower
+    const flower = cell as Flower
     flower.ancestors = {
       '1,1': 1,
       '3,3': 10,
@@ -135,7 +134,7 @@ describe('FlowerSystem', () => {
 
     FlowerSystem.tick(grid, activeCells)
 
-    const ancestors = (cell.data.flower as Flower).ancestors
+    const ancestors = (cell as Flower).ancestors
     expect(ancestors).toHaveProperty('1,1')
     expect(ancestors).toHaveProperty('3,3')
     expect(ancestors).not.toHaveProperty('4,4')

@@ -1,14 +1,7 @@
 import { hslToHex, mixColors } from '../utils/colors'
-import type { Cell, GameSystem } from '../types'
+import type { Cell, GameSystem, Flower } from '../types'
 
-// Re-exporting these here for testing purposes or removing from types.ts later
-export interface Flower {
-  color: string
-  ancestors: Record<string, number>
-  age: number
-}
-
-export type FlowerSpawn = Flower & { x: number; y: number }
+const isFlower = (cell: Cell): cell is Flower => 'color' in cell
 
 const MAX_POLLINATION_CHANCE = 0.1
 const MAX_FLOWER_AGE = 100
@@ -37,9 +30,10 @@ const processCellPollination = (
   y: number,
   cell: Cell,
   deadFlowers: { x: number; y: number }[],
-  newFlowers: FlowerSpawn[],
+  newFlowers: Flower[],
 ) => {
-  const flower = cell.data.flower as Flower
+  if (!isFlower(cell)) return
+  const flower = cell
   flower.age++
 
   if (flower.age > MAX_FLOWER_AGE) {
@@ -54,8 +48,8 @@ const processCellPollination = (
   if (Math.random() >= chance) return
 
   const neighbors = getAdjacentCells(grid, x, y)
-  const adjacentFlowers = neighbors.filter((n) => n.data.flower)
-  const emptyCells = neighbors.filter((n) => !n.data.flower)
+  const adjacentFlowers = neighbors.filter(isFlower)
+  const emptyCells = neighbors.filter((n) => !isFlower(n))
 
   if (adjacentFlowers.length === 0 || emptyCells.length === 0) return
 
@@ -74,7 +68,7 @@ const processCellPollination = (
     }
 
     addAncestors(flower.ancestors)
-    addAncestors((partner.data.flower as Flower).ancestors)
+    addAncestors(partner.ancestors)
     combinedAncestors[`${cell.x},${cell.y}`] = 1
     combinedAncestors[`${partner.x},${partner.y}`] = 1
   }
@@ -82,7 +76,7 @@ const processCellPollination = (
   newFlowers.push({
     x: spawnCell.x,
     y: spawnCell.y,
-    color: mixColors(flower.color, (partner.data.flower as Flower).color),
+    color: mixColors(flower.color, partner.color),
     ancestors: combinedAncestors,
     age: 0,
   })
@@ -100,7 +94,7 @@ export const FlowerSystem: GameSystem = {
   name: 'Flower Breeding',
 
   hasEntity(cell: Cell): boolean {
-    return !!cell.data.flower
+    return isFlower(cell)
   },
 
   placeEntity(cell: Cell, brushColor: string | null, activeCells: Set<Cell>): void {
@@ -111,21 +105,29 @@ export const FlowerSystem: GameSystem = {
       color = hslToHex(rainbowHue, 100, 50)
       rainbowHue = (rainbowHue + 15) % 360
     }
-    cell.data.flower = { color, ancestors: {}, age: 0 } as Flower
+
+    const flower = cell as Flower
+    flower.color = color
+    flower.ancestors = {}
+    flower.age = 0
+
     activeCells.add(cell)
   },
 
   clearEntity(cell: Cell, activeCells: Set<Cell>): void {
-    cell.data.flower = null
+    const f = cell as Partial<Flower>
+    delete f.color
+    delete f.ancestors
+    delete f.age
     activeCells.delete(cell)
   },
 
   tick(grid: Cell[][], activeCells: Set<Cell>): void {
-    const newFlowers: FlowerSpawn[] = []
+    const newFlowers: Flower[] = []
     const deadFlowers: { x: number; y: number }[] = []
 
     for (const cell of activeCells) {
-      if (cell.data.flower) {
+      if (isFlower(cell)) {
         processCellPollination(grid, cell.x, cell.y, cell, deadFlowers, newFlowers)
       }
     }
@@ -139,8 +141,8 @@ export const FlowerSystem: GameSystem = {
 
     if (isTrackingHistory) {
       for (const cell of activeCells) {
-        const flower = cell.data.flower as Flower
-        if (!flower) continue
+        if (!isFlower(cell)) continue
+        const flower = cell
 
         const entries = Object.entries(flower.ancestors)
         if (entries.length === 0) continue
@@ -157,7 +159,7 @@ export const FlowerSystem: GameSystem = {
           const ay = parseInt(parts[1] || '', 10)
 
           const ancestorCell = grid[ay]?.[ax]
-          if (ancestorCell?.data.flower) {
+          if (ancestorCell && isFlower(ancestorCell)) {
             cleaned[coord] = dist
           } else {
             changed = true
@@ -170,7 +172,10 @@ export const FlowerSystem: GameSystem = {
     for (const f of newFlowers) {
       const cell = grid[f.y]?.[f.x]
       if (cell) {
-        cell.data.flower = { color: f.color, ancestors: f.ancestors, age: f.age } as Flower
+        const flower = cell as Flower
+        flower.color = f.color
+        flower.ancestors = f.ancestors
+        flower.age = f.age
         activeCells.add(cell)
       }
     }
@@ -183,8 +188,8 @@ export const FlowerSystem: GameSystem = {
     py: number,
     cellSize: number,
   ): void {
-    const flower = cell.data.flower as Flower
-    if (!flower) return
+    if (!isFlower(cell)) return
+    const flower = cell
 
     const centerX = px + cellSize / 2
     const centerY = py + cellSize / 2
@@ -216,9 +221,10 @@ export const FlowerSystem: GameSystem = {
   ): boolean {
     if (!context.selectedCell) return false
 
-    const selectedFlower = context.grid[context.selectedCell.y]?.[context.selectedCell.x]?.data
-      .flower as Flower | undefined
-    if (!selectedFlower) return false
+    const selectedCell = context.grid[context.selectedCell.y]?.[context.selectedCell.x]
+    if (!selectedCell || !isFlower(selectedCell)) return false
+
+    const selectedFlower = selectedCell
 
     const ancestorDist = selectedFlower.ancestors[`${cell.x},${cell.y}`]
     if (ancestorDist !== undefined) {

@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, VueWrapper } from '@vue/test-utils'
 import App from './App.vue'
-import type { Cell } from './types'
+import type { Cell, Flower } from './types'
+import { FlowerSystem } from './systems/FlowerSystem'
 
 describe('App.vue (Core Engine)', () => {
   let wrapper: VueWrapper<InstanceType<typeof App>>
@@ -72,8 +73,8 @@ describe('App.vue (Core Engine)', () => {
     await clickCanvas(0, 0, true)
 
     const cell = wrapper.vm.grid[0]![0]!
-    expect(cell.data.flower).not.toBeUndefined()
-    expect(cell.data.flower?.color).toBe('#ff0000')
+    expect(cell).toHaveProperty('color')
+    expect((cell as Flower).color).toBe('#ff0000')
   })
 
   it('toggles debug menu after pressing b five times quickly', async () => {
@@ -115,8 +116,7 @@ describe('App.vue (Core Engine)', () => {
     const targetCell = cellsArray.find((c: Cell) => c.x === 5 && c.y === 5)!
 
     // Simulate system logic clearing the cell
-    targetCell.data = {}
-    wrapper.vm.activeCells.delete(targetCell)
+    FlowerSystem.clearEntity(targetCell, wrapper.vm.activeCells)
 
     expect(wrapper.vm.activeCells.size).toBe(1)
     expect(

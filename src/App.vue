@@ -153,7 +153,7 @@ const initializeGrid = () => {
   for (let y = 0; y < GRID_SIZE; y++) {
     const row: Cell[] = []
     for (let x = 0; x < GRID_SIZE; x++) {
-      row.push({ x, y, data: {} })
+      row.push({ x, y })
     }
     newGrid.push(row)
   }

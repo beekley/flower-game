@@ -1,15 +1,12 @@
-export interface Flower {
-  color: string
-  ancestors: Record<string, number>
-  age: number
-}
-
-export type FlowerSpawn = Flower & { x: number; y: number }
-
 export interface Cell {
   x: number
   y: number
-  data: Record<string, any>
+}
+
+export interface Flower extends Cell {
+  color: string
+  ancestors: Record<string, number>
+  age: number
 }
 
 export interface GameSystem {
