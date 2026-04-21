@@ -52,3 +52,12 @@ npm run test:unit
 ```sh
 npm run lint
 ```
+
+## Benchmarking Roadmap & TODO
+
+We have scoped out an additional future need to construct a real-browser automated profiling script leveraging Playwright (`tests/perf/fps.perf.spec.ts`) alongside the core calculation speed benchmarks (`npm run test:bench`).
+When we revisit browser rendering tests, the logic should:
+1. Initialize a Chromium instance via Playwright and navigate to the application.
+2. Hook into `requestAnimationFrame` using `page.evaluate()` to dynamically aggregate and track dropped frames natively across the HTML5 Canvas node over a defined interval.
+3. Scale up the grid size explicitly within the browser execution to capture the true rendering threshold points (FPS degradation limits).
+4. Run as an independent command (e.g. `npm run test:perf`).

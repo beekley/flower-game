@@ -21,6 +21,7 @@ describe('App.vue (Core Engine)', () => {
       stroke: vi.fn(),
       arc: vi.fn(),
       restore: vi.fn(),
+      drawImage: vi.fn(),
     })
 
     HTMLCanvasElement.prototype.getBoundingClientRect = vi.fn().mockReturnValue({

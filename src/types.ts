@@ -22,19 +22,15 @@ export interface GameSystem {
     py: number,
     cellSize: number,
   ): void
-  drawCustomBackground?(
+  drawOverlay?(
     ctx: CanvasRenderingContext2D,
-    cell: Cell,
-    px: number,
-    py: number,
-    cellSize: number,
     context: {
-      isSelected: boolean
-      isHovered: boolean
       selectedCell: { x: number; y: number } | null
       grid: Cell[][]
+      cellSize: number
+      totalCellSize: number
     },
-  ): boolean
+  ): void
   debugItems?: () => Array<{
     label: string
     value: string | number | boolean

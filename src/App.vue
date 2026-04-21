@@ -31,6 +31,7 @@ let lastTickRateUpdate = 0 // Initialized in onMounted
 let tickInterval: number | undefined
 let memoryInterval: number | undefined
 let rafId: number | undefined
+let cachedBgCanvas: HTMLCanvasElement | null = null
 
 const CELL_SIZE = 20
 const CELL_GAP = 4
@@ -92,55 +93,57 @@ const draw = () => {
   ctx.save()
   ctx.scale(dpr, dpr)
 
-  // Background
-  ctx.fillStyle = '#121212'
-  ctx.fillRect(0, 0, GRID_PX_SIZE, GRID_PX_SIZE)
+  // 1. Background
+  if (cachedBgCanvas) {
+    ctx.drawImage(cachedBgCanvas, 0, 0, GRID_PX_SIZE, GRID_PX_SIZE)
+  } else {
+    ctx.fillStyle = '#121212'
+    ctx.fillRect(0, 0, GRID_PX_SIZE, GRID_PX_SIZE)
+  }
 
-  for (let y = 0; y < GRID_SIZE; y++) {
-    const row = grid.value[y]
-    if (!row) continue
-    for (let x = 0; x < GRID_SIZE; x++) {
-      const cell = row[x]
-      if (!cell) continue
+  // 2. System Overlay
+  if (currentSystem.value.drawOverlay) {
+    currentSystem.value.drawOverlay(ctx, {
+      selectedCell: selectedCell.value,
+      grid: grid.value,
+      cellSize: CELL_SIZE,
+      totalCellSize: TOTAL_CELL_SIZE,
+    })
+  }
+
+  // 3. Hovered Cell
+  if (mousePos.value && mousePos.value.x >= 0 && mousePos.value.y >= 0) {
+    const { x, y } = mousePos.value
+    const cell = grid.value[y]?.[x]
+    if (cell && !currentSystem.value.hasEntity(cell)) {
       const px = x * TOTAL_CELL_SIZE
       const py = y * TOTAL_CELL_SIZE
-
-      const isSelected = selectedCell.value?.x === x && selectedCell.value?.y === y
-      const isHovered = mousePos.value?.x === x && mousePos.value?.y === y
-
-      let drawnCustomBg = false
-      if (currentSystem.value.drawCustomBackground) {
-        drawnCustomBg = currentSystem.value.drawCustomBackground(ctx, cell, px, py, CELL_SIZE, {
-          isSelected,
-          isHovered,
-          selectedCell: selectedCell.value,
-          grid: grid.value,
-        })
-      }
-
-      if (!drawnCustomBg) {
-        // Draw Cell Background
-        ctx.beginPath()
-        const radius = 6
-        ctx.roundRect(px, py, CELL_SIZE, CELL_SIZE, radius)
-
-        if (isSelected) {
-          ctx.fillStyle = '#444'
-          ctx.strokeStyle = '#ffffff'
-          ctx.lineWidth = 2
-          ctx.fill()
-          ctx.stroke()
-        } else if (isHovered && !currentSystem.value.hasEntity(cell)) {
-          ctx.fillStyle = '#3a3a3a'
-          ctx.fill()
-        } else {
-          ctx.fillStyle = '#161616'
-          ctx.fill()
-        }
-      }
-
-      currentSystem.value.drawCell(ctx, cell, px, py, CELL_SIZE)
+      ctx.beginPath()
+      ctx.roundRect(px, py, CELL_SIZE, CELL_SIZE, 6)
+      ctx.fillStyle = '#3a3a3a'
+      ctx.fill()
     }
+  }
+
+  // 4. Selected Cell
+  if (selectedCell.value) {
+    const { x, y } = selectedCell.value
+    const px = x * TOTAL_CELL_SIZE
+    const py = y * TOTAL_CELL_SIZE
+    ctx.beginPath()
+    ctx.roundRect(px, py, CELL_SIZE, CELL_SIZE, 6)
+    ctx.fillStyle = '#444'
+    ctx.strokeStyle = '#ffffff'
+    ctx.lineWidth = 2
+    ctx.fill()
+    ctx.stroke()
+  }
+
+  // 5. Active Entities
+  for (const cell of activeCells.value) {
+    const px = cell.x * TOTAL_CELL_SIZE
+    const py = cell.y * TOTAL_CELL_SIZE
+    currentSystem.value.drawCell(ctx, cell, px, py, CELL_SIZE)
   }
 
   ctx.restore()
@@ -204,6 +207,25 @@ onMounted(() => {
     canvasRef.value.height = GRID_PX_SIZE * dpr
     canvasRef.value.style.width = `${GRID_PX_SIZE}px`
     canvasRef.value.style.height = `${GRID_PX_SIZE}px`
+
+    cachedBgCanvas = document.createElement('canvas')
+    cachedBgCanvas.width = GRID_PX_SIZE * dpr
+    cachedBgCanvas.height = GRID_PX_SIZE * dpr
+    const bgCtx = cachedBgCanvas.getContext('2d', { alpha: false })
+    if (bgCtx) {
+      bgCtx.scale(dpr, dpr)
+      bgCtx.fillStyle = '#121212'
+      bgCtx.fillRect(0, 0, GRID_PX_SIZE, GRID_PX_SIZE)
+      bgCtx.fillStyle = '#161616'
+      for (let y = 0; y < GRID_SIZE; y++) {
+        for (let x = 0; x < GRID_SIZE; x++) {
+          bgCtx.beginPath()
+          bgCtx.roundRect(x * TOTAL_CELL_SIZE, y * TOTAL_CELL_SIZE, CELL_SIZE, CELL_SIZE, 6)
+          bgCtx.fill()
+        }
+      }
+    }
+
     rafId = requestAnimationFrame(draw)
   }
 
@@ -359,55 +381,6 @@ html {
   cursor: crosshair;
   border-radius: 8px;
   display: block;
-}
-
-.cell {
-  width: 20px;
-  height: 20px;
-  background-color: #161616;
-  border-radius: 6px;
-  cursor: pointer;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  transition:
-    background-color 0.2s,
-    transform 0.1s,
-    border 0.2s,
-    box-shadow 0.2s;
-  box-sizing: border-box;
-  border: 1px solid transparent;
-}
-
-.cell.is-selected {
-  border: 2px solid #ffffff;
-  background-color: #444;
-  box-shadow: 0 0 15px rgba(255, 255, 255, 0.3);
-}
-
-.cell.is-ancestor {
-  transition: all 0.3s ease;
-}
-
-.cell:hover:not(.has-flower, .is-selected, .is-ancestor) {
-  background-color: #3a3a3a;
-  transform: scale(1.05);
-}
-
-.flower {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-}
-
-@keyframes popIn {
-  0% {
-    transform: scale(0);
-  }
-  100% {
-    transform: scale(1);
-  }
 }
 
 .debug-menu {

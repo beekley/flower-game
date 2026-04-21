@@ -10,14 +10,16 @@ const MAX_FLOWER_AGE = 100
 let isTrackingHistory = false
 let rainbowHue = 0
 
+const DIRECTIONS = [
+  { dx: 0, dy: -1 },
+  { dx: 0, dy: 1 },
+  { dx: -1, dy: 0 },
+  { dx: 1, dy: 0 },
+]
+
 const getAdjacentCells = (grid: Cell[][], x: number, y: number) => {
   const neighbors: Cell[] = []
-  for (const { dx, dy } of [
-    { dx: 0, dy: -1 },
-    { dx: 0, dy: 1 },
-    { dx: -1, dy: 0 },
-    { dx: 1, dy: 0 },
-  ]) {
+  for (const { dx, dy } of DIRECTIONS) {
     const cell = grid[y + dy]?.[x + dx]
     if (cell) neighbors.push(cell)
   }
@@ -206,45 +208,46 @@ export const FlowerSystem: GameSystem = {
     ctx.shadowBlur = 0
   },
 
-  drawCustomBackground(
+  drawOverlay(
     ctx: CanvasRenderingContext2D,
-    cell: Cell,
-    px: number,
-    py: number,
-    cellSize: number,
     context: {
-      isSelected: boolean
-      isHovered: boolean
       selectedCell: { x: number; y: number } | null
       grid: Cell[][]
+      cellSize: number
+      totalCellSize: number
     },
-  ): boolean {
-    if (!context.selectedCell) return false
+  ): void {
+    if (!context.selectedCell) return
 
     const selectedCell = context.grid[context.selectedCell.y]?.[context.selectedCell.x]
-    if (!selectedCell || !isFlower(selectedCell)) return false
+    if (!selectedCell || !isFlower(selectedCell)) return
 
     const selectedFlower = selectedCell
 
-    const ancestorDist = selectedFlower.ancestors[`${cell.x},${cell.y}`]
-    if (ancestorDist !== undefined) {
+    for (const coord in selectedFlower.ancestors) {
+      const ancestorDist = selectedFlower.ancestors[coord]
+      if (ancestorDist === undefined) continue
+
+      const parts = coord.split(',')
+      const ax = parseInt(parts[0] || '', 10)
+      const ay = parseInt(parts[1] || '', 10)
+
+      const px = ax * context.totalCellSize
+      const py = ay * context.totalCellSize
+
       const { r, g, b, a } = getAncestorColor(ancestorDist)
 
       // Draw background specifically for this ancestor
       ctx.beginPath()
       const radius = 6
-      ctx.roundRect(px, py, cellSize, cellSize, radius)
+      ctx.roundRect(px, py, context.cellSize, context.cellSize, radius)
 
       ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.2)`
       ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${a})`
       ctx.lineWidth = 1
       ctx.fill()
       ctx.stroke()
-
-      return true
     }
-
-    return false
   },
 
   debugItems() {
